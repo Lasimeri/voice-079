@@ -11,9 +11,11 @@ ip="${YG6_IP:-192.168.0.125}"
 pf="${LAPTOP_SSH_PASS_FILE:-$HOME/.config/voice-079/laptop-ssh-pass}"
 A="$HOME/.cache/voice-079/laptop-askpass.sh"
 umask 077; printf '#!/bin/sh\nexec cat "%s"\n' "$pf" > "$A"; chmod 700 "$A"
-src="${VOICE079_OUT_MONITOR:-o79_net.monitor}"
+src="${VOICE079_OUT_MONITOR:-voice079_out.monitor}"
 while :; do
-    pw-record --target "$src" --format s16 --rate 48000 --channels 2 - 2>/dev/null |
+    # parec, not pw-record: pw-record --target does not resolve a monitor's
+    # name and silently recorded the default source (the desk microphone).
+    parec --device="$src" --format=s16le --rate=48000 --channels=2 --raw 2>/dev/null |
         env SSH_ASKPASS="$A" SSH_ASKPASS_REQUIRE=force DISPLAY=:0 \
             ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
                 -o NumberOfPasswordPrompts=1 -o ConnectTimeout=10 \
