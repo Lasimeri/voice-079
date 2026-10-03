@@ -1,18 +1,21 @@
 #!/bin/bash
-# follow079: the audio follows the person. Whichever camera has the face
-# tracker's ADMIN reticle locked on them (feeds/NAME.log, `locked=1`) is the
-# room they are in, and 079's voice, the music and the microphone the
-# listener hears move there:
-#   desk (the inside camera): 079 on the desktop speakers (voice079_out), the
-#     music player (VLC) on the default sink, the desk mic heard;
-#   bedroom (the bedroom laptop's camera): 079 into o79_net, a silent sink
-#     streamed to the laptop (audio-to-yg6.sh), the music into bedroom_music,
-#     streamed there too (music-to-yg6.sh), the laptop's mic heard
-#     (bedroom-mic-in.sh into mix_mic, which the listener reads).
-# A move needs the new room's reticle locked in FOLLOW_LOCKS (3) of its last
-# 5 seconds and the current room's in none of its last FOLLOW_AWAY (20) s:
-# a face flickering on the bedroom camera, or the person looking away from
-# the desk, moves nothing. With the person in no camera, nothing moves.
+# follow079: the audio follows the person between the rooms. A room claims
+# them when its camera's face tracker has the ADMIN reticle locked on them
+# (feeds/CAM.log, locked=1, in 3 of its last 5 seconds) or its microphone
+# hears someone speaking (feeds/mic-ROOM.log from micwatch, speech=1 in 2 of
+# its last 3 seconds). 079's voice, the music player and the microphone the
+# listener hears then move to that room:
+#   desk (the inside camera, the desk mic): 079 on the desktop speakers
+#     (voice079_out), the music on the default sink, the desk mic heard;
+#   bedroom (Yg6) and laptop (E16, its HDMI output, the CRT): 079 into
+#     o79_ROOM and the music into music_ROOM, both streamed to the laptop's
+#     speakers, the laptop's mic heard (room-link.sh).
+# The listener reads mix_mic, where only the person's room's mic is open.
+# A move: by voice, when the new room hears speech and the current room's
+# mic has heard none for 5 s; by face, when the current room has had no
+# lock for FOLLOW_AWAY (20) s. A face whose box has not moved for 30 s (a
+# picture on the wall, 48 by 62 px at the top of the desk camera's view,
+# held the desk) is no one. With nobody seen or heard, nothing moves.
 #   follow079 start | stop | status        (log: ~/.cache/voice-079/follow.log)
 set -u
 here="$(dirname "$(readlink -f "$0")")"
@@ -21,49 +24,87 @@ feeds="${CAM079_FEEDS:-$HOME/.local/share/phi-stream/dev/feeds}"
 log="$HOME/.cache/voice-079/follow.log"
 pidf="$rt/follow079.pid"
 st="$here/state079"
-LOCKS=${FOLLOW_LOCKS:-3} AWAY=${FOLLOW_AWAY:-20}
+AWAY=${FOLLOW_AWAY:-20}
 mkdir -p "$rt" "$(dirname "$log")"
 say() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$log"; }
 
-# Seconds of the last WINDOW in which CAM's reticle was locked (its log, one
-# line a second; nothing if the camera is not reporting).
-locked_in() {   # CAM WINDOW
+ROOMS="desk bedroom laptop"
+cam_of() { case $1 in desk) echo inside ;; *) echo "$1" ;; esac; }
+# Whose microphone speaks for a room in a move by voice: the laptop shares
+# the living room with the desk, so its mic hears the desk speakers (the
+# desk mic cancels them, the laptop's cannot) and only the desk mic speaks
+# for the living room; voice moves between the living room and the bedroom,
+# faces between the desk and the laptop.
+mic_of() { case $1 in laptop) echo desk ;; *) echo "$1" ;; esac; }
+link_of() {   # ROOM -> IP TARGET MICSRC
+    case $1 in
+        bedroom) echo "${YG6_IP:-192.168.0.125} yg6_aec_ref yg6_mic_clean" ;;
+        laptop) echo "${E16_IP:-192.168.0.78} e16_aec_ref e16_mic_clean" ;;
+    esac
+}
+
+# Seconds of the last WINDOW the camera had a moving face locked (a box that
+# stayed within 4 px for its last 30 locked seconds is a still picture).
+locks() {   # CAM WINDOW
     local now; now=$(date +%s%6N)
-    tail -n 60 "$feeds/$1.log" 2>/dev/null | awk -v now="$now" -v w="$2" '
-        { t = substr($1, 3) + 0 } t >= now - w * 1000000 && /locked=1/ { n++ } END { print n + 0 }'
+    tail -n 90 "$feeds/$1.log" 2>/dev/null | awk -v now="$now" -v w="$2" '
+        /locked=1/ {
+            t = substr($1, 3) + 0
+            match($0, /box=[0-9]+,[0-9]+/); split(substr($0, RSTART + 4, RLENGTH - 4), b, ",")
+            n++; X[n] = b[1]; Y[n] = b[2]; T[n] = t
+        }
+        END {
+            k = 0; still = 0
+            if (n >= 30) {
+                lx = hx = X[n]; ly = hy = Y[n]
+                for (i = n - 29; i <= n; i++) { if (X[i] < lx) lx = X[i]; if (X[i] > hx) hx = X[i]; if (Y[i] < ly) ly = Y[i]; if (Y[i] > hy) hy = Y[i] }
+                still = (hx - lx < 4 && hy - ly < 4)
+            }
+            if (!still) for (i = 1; i <= n; i++) if (T[i] >= now - w * 1000000) k++
+            print k
+        }'
+}
+# Seconds of the last WINDOW its microphone heard speech.
+speech() {   # ROOM WINDOW
+    local now; now=$(date +%s%6N)
+    tail -n 30 "$feeds/mic-$1.log" 2>/dev/null | awk -v now="$now" -v w="$2" '
+        { t = substr($1, 3) + 0 } t >= now - w * 1000000 && / speech=1/ { n++ } END { print n + 0 }'
 }
 
-# The bedroom's microphone stream and the desk's, muted or not, into mix_mic.
-mics() {   # desk|bedroom
-    local d=1 b=0
-    [ "$1" = desk ] && { d=0; b=1; }
-    pactl set-source-mute voice079_mic_nr "$d" 2>/dev/null
-    pactl list sink-inputs 2>/dev/null | awk '/^Sink Input #/{id=substr($3,2)} /application.name = "bedroom-mic"/{print id}' |
-        while read -r i; do pactl set-sink-input-mute "$i" "$b"; done
+# Only the person's room's microphone open into mix_mic.
+mics() {   # ROOM
+    pactl list sink-inputs 2>/dev/null | awk '
+        /^Sink Input #/ { id = substr($3, 2) }
+        /application.name = "/ { a = $0; sub(/.*application.name = "/, "", a); sub(/".*/, "", a); print id, a }
+        /media.name = "loopback/ { print id, "desk-mic" }' |
+        while read -r id who; do
+            case "$who" in
+                *-mic) [ "$who" = "$1-mic" ] && m=0 || m=1; pactl set-sink-input-mute "$id" "$m" ;;
+            esac
+        done
 }
-
-apply() {   # desk|bedroom
-    if [ "$1" = bedroom ]; then
-        echo o79_net > "$rt/playsink"
-    else
-        rm -f "$rt/playsink"
-    fi
-    echo "$1" > "$rt/music_room"
-    mics "$1"
+# The music player's streams onto the room's sink.
+music() {   # ROOM
+    local to=music_$1
+    [ "$1" = desk ] && to=$(pactl get-default-sink)
+    pactl list sink-inputs 2>/dev/null | awk '/^Sink Input #/{id=substr($3,2)} /application.name = "VLC/{print id}' |
+        while read -r i; do pactl move-sink-input "$i" "$to" 2>/dev/null; done
+}
+apply() {   # ROOM WHY
+    if [ "$1" = desk ]; then rm -f "$rt/playsink"; else echo "o79_$1" > "$rt/playsink"; fi
     echo "$1" > "$rt/room"
-    say "room: $1"
+    mics "$1"
+    music "$1"
+    say "room: $1 ($2)"
 }
 
 case "${1:-}" in
     stop)
         [ -f "$pidf" ] && kill "$(cat "$pidf")" 2>/dev/null
         rm -f "$pidf"
-        apply desk
-        "$here/bedroom-mic-in.sh" stop > /dev/null
-        [ -f "$HOME/.cache/voice-079/yg6-audio.pid" ] && kill "$(cat "$HOME/.cache/voice-079/yg6-audio.pid")" 2>/dev/null
-        pkill -f 'parec --device=o79_net[.]monitor'
-        pactl set-source-mute voice079_mic_nr 0 2>/dev/null
-        # The listener back on the desk alone.
+        apply desk "stopped"
+        for r in bedroom laptop; do "$here/room-link.sh" stop "$r"; done
+        [ -f "$rt/micwatch-desk.pid" ] && kill -- -"$(cat "$rt/micwatch-desk.pid")" 2>/dev/null
         "$here/voice079" stop > /dev/null; "$here/voice079" start --wake > /dev/null
         "$st" set follow off
         echo "follow079: off; everything on the desk"
@@ -71,28 +112,30 @@ case "${1:-}" in
         ;;
     status)
         echo "room: $(cat "$rt/room" 2>/dev/null || echo none)"
-        for c in inside bedroom; do echo "  $c locked $(locked_in "$c" 5)/5 s"; done
+        for r in $ROOMS; do echo "  $r: face $(locks "$(cam_of "$r")" 5)/5 s, voice $(speech "$r" 3)/3 s"; done
         exit 0
         ;;
     _loop)
-        # Where it starts: the room last kept, else the camera that saw the
-        # person locked most recently (the last hour of their logs).
-        last_lock() { tail -n 3600 "$feeds/$1.log" 2>/dev/null | grep 'locked=1' | tail -n 1 | cut -d' ' -f1 | cut -c3-; }
-        room=$(cat "$rt/room" 2>/dev/null)
-        if [ -z "$room" ]; then
-            if [ "$(last_lock bedroom || true)" \> "$(last_lock inside || true)" ]; then room=bedroom; else room=desk; fi
-        fi
-        apply "$room"
+        room=$(cat "$rt/room" 2>/dev/null || echo desk)
+        apply "$room" "start"
         while :; do
             sleep 2
-            if [ "$room" = desk ]; then mine=inside; other=bedroom; to=bedroom
-            else mine=bedroom; other=inside; to=desk; fi
-            if [ "$(locked_in "$other" 5)" -ge "$LOCKS" ] && [ "$(locked_in "$mine" "$AWAY")" -eq 0 ]; then
-                room=$to
-                apply "$room"
-            fi
-            # The bedroom stream reconnects under a new id: its mute kept.
-            mics "$room"
+            best="" bestscore=0 why=""
+            for r in $ROOMS; do
+                [ "$r" = "$room" ] && continue
+                f=$(locks "$(cam_of "$r")" 5) v=$(speech "$r" 3)
+                if [ "$(mic_of "$r")" = "$r" ] && [ "$(mic_of "$room")" != "$r" ] && [ "$v" -ge 2 ] && [ "$(speech "$(mic_of "$room")" 5)" -eq 0 ]; then
+                    s=$((10 + v)); w="heard there"
+                elif [ "$f" -ge 3 ] && [ "$(locks "$(cam_of "$room")" "$AWAY")" -eq 0 ]; then
+                    s=$f; w="seen there"
+                else
+                    continue
+                fi
+                if [ "$s" -gt "$bestscore" ]; then best=$r bestscore=$s why=$w; fi
+            done
+            if [ -n "$best" ]; then room=$best; apply "$room" "$why"; fi
+            # Streams reconnect under new ids, and each track is a new one.
+            mics "$room"; music "$room"
         done
         ;;
     start) ;;
@@ -101,23 +144,27 @@ esac
 
 if [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then echo "follow079: already on"; exit 0; fi
 "$st" set follow on
-# The bedroom's three links, each reconnecting on its own.
-pactl list short sinks | grep -q o79_net ||
-    pactl load-module module-null-sink sink_name=o79_net sink_properties=device.description=079-to-bedroom > /dev/null
-pgrep -f 'parec --device=o79_net[.]monitor' > /dev/null ||
-    VOICE079_OUT_MONITOR=o79_net.monitor setsid "$here/audio-to-yg6.sh" > "$HOME/.cache/voice-079/yg6-audio.log" 2>&1 < /dev/null &
-pgrep -f 'parec --device=bedroom_music[.]monitor' > /dev/null ||
-    setsid "$here/music-to-yg6.sh" > "$HOME/.cache/voice-079/yg6-music.log" 2>&1 < /dev/null &
-pgrep -f 'pacat --playback --device=mix_mi[c]' > /dev/null ||
-    setsid "$here/bedroom-mic-in.sh" > "$HOME/.cache/voice-079/yg6-mic.log" 2>&1 < /dev/null &
+# The earlier single-room links give way to room-link.sh.
+"$here/bedroom-mic-in.sh" stop > /dev/null 2>&1
+"$here/music-to-yg6.sh" stop > /dev/null 2>&1
+[ -f "$HOME/.cache/voice-079/yg6-audio.pid" ] && kill "$(cat "$HOME/.cache/voice-079/yg6-audio.pid")" 2>/dev/null
+pactl list short sinks | grep -q '	mix_mic	' ||
+    pactl load-module module-null-sink sink_name=mix_mic sink_properties=device.description=Mixed-mic > /dev/null
+pactl list short modules | grep -q 'module-loopback.*sink=mix_mic' ||
+    pactl load-module module-loopback source=voice079_mic_nr sink=mix_mic latency_msec=30 source_dont_move=true sink_dont_move=true > /dev/null
+pactl set-source-mute voice079_mic_nr 0 2>/dev/null
+for r in bedroom laptop; do
+    [ -f "$HOME/.cache/voice-079/link-$r.pid" ] && kill -0 "$(cat "$HOME/.cache/voice-079/link-$r.pid")" 2>/dev/null && continue
+    # shellcheck disable=SC2046
+    setsid "$here/room-link.sh" "$r" $(link_of "$r") > "$HOME/.cache/voice-079/link-$r.log" 2>&1 < /dev/null &
+done
+# The desk's own voice detector, on its noise-reduced mic.
+setsid bash -c 'echo $$ > "'"$rt/micwatch-desk.pid"'"; while :; do parec --device=voice079_mic_nr --format=s16le --rate=16000 --channels=1 --raw 2>/dev/null | "'"$here/micwatch"'" desk "'"$feeds/mic-desk"'"; sleep 2; done' > /dev/null 2>&1 < /dev/null &
 sleep 3
-# The listener on the two rooms' mix (one of the two muted at a time).
 if ! grep -aq 'listening through mix_mic.monitor' <(tail -n 5 "$HOME/.local/share/speak-079/listen.log" 2>/dev/null); then
     "$here/voice079" stop > /dev/null
     VOICE079_SRC=mix_mic.monitor "$here/voice079" start --wake > /dev/null
 fi
-setsid bash -c '
-    echo $$ > "'"$pidf"'"
-    exec "'"$0"'" _loop' > /dev/null 2>&1 < /dev/null &
-echo "follow079: on (desk and bedroom), log $log"
+setsid bash -c 'echo $$ > "'"$pidf"'"; exec "'"$0"'" _loop' > /dev/null 2>&1 < /dev/null &
+echo "follow079: on (desk, bedroom, laptop), log $log"
 exit 0
