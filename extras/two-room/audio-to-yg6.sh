@@ -20,6 +20,6 @@ while :; do
             ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
                 -o NumberOfPasswordPrompts=1 -o ConnectTimeout=10 \
                 -o ServerAliveInterval=15 -o StrictHostKeyChecking=no "lasimeri@$ip" \
-            "export XDG_RUNTIME_DIR=/run/user/1000; exec pw-cat --playback --target yg6_aec_ref --format s16 --rate 48000 --channels 2 -" 2>/dev/null
+            "export XDG_RUNTIME_DIR=/run/user/1000; exec pw-cat --playback --raw --target yg6_aec_ref --format s16 --rate 48000 --channels 2 -" 2>/dev/null
     sleep 2
 done
