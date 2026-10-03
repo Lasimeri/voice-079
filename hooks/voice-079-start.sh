@@ -41,7 +41,7 @@ if [ "$("$here/state079" get follow off)" = on ] &&
 fi
 # Detached: the echo cancellers and noise reduction take seconds to load,
 # and Claude Code does not wait for them.
-VOICE079_SRC="$src" setsid flock -n "$dir/start.lock" "$here/voice079" start $flag \
+VOICE079_SRC="$src" setsid flock -n -o "$dir/start.lock" "$here/voice079" start $flag \
     >> "$HOME/.local/share/speak-079/listen.log" 2>&1 < /dev/null &
 echo "[voice: listener started ($said), typed into this session]"
 exit 0
