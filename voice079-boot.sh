@@ -9,12 +9,10 @@ for _ in $(seq 1 90); do
         pactl list sources short 2>/dev/null | grep -q "Yamaha_Corporation_MG-XU" && break
     sleep 1
 done
-# Listening mode: open mic once the person's voiceprint exists (it keeps other
-# voices, music and video out on its own); until then the name is required.
-# VOICE079_BOOT_MODE overrides (--wake, --ptt, or empty for open mic).
-if [ -n "${VOICE079_BOOT_MODE+set}" ]; then mode="$VOICE079_BOOT_MODE"
-elif [ -s "$HOME/.local/share/speak-079/voiceprint.f32" ]; then mode=""
-else mode="--wake"; fi
+# Listening mode: the trigger word is required ("Claude, ..."), with a short
+# follow-up window after 079 speaks; the person's choice. VOICE079_BOOT_MODE
+# overrides (empty for open mic, --ptt for push to talk).
+mode="${VOICE079_BOOT_MODE---wake}"
 "$HOME/tts079/voice079" start $mode
 # 079's own voice at the level the person chose (VOICE079_VOLUME, default 40%;
 # their music and the master volume are never touched).

@@ -229,7 +229,10 @@ case "${1:-}" in
         if [ "$p" = "muted" ]; then printf '079 · muted (number pad period)\n'; exit 0; fi
         if [ -n "$s" ]; then printf '079 ▸ %s\n' "$s"; exit 0; fi
         st="079 · listening"
-        [ -e "$dir/phone" ] && st+=" · say \"Claude\" first" || st+=" · open mic"
+        lm=$(cat "$dir/listenmode" 2>/dev/null)
+        if [ -e "$dir/phone" ] || [ "$lm" = wake ]; then st+=" · say \"Claude\" first"
+        elif [ "$lm" = ptt ]; then st+=" · hold \` to talk"
+        else st+=" · open mic"; fi
         v=$(cat "$dir/voice" 2>/dev/null); [ -n "$v" ] && st+=" · voice: $v"
         if [ -s "$dir/lastheard" ] && IFS=$'\t' read -r ts verdict text < "$dir/lastheard"; then
             age=$(( $(date +%s) - ts ))

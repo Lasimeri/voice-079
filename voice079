@@ -36,6 +36,8 @@ listen() {
     local mode="" typer=${VOICE079_TYPER:---mute}
     [ "${1:-}" = "--wake" ] && mode=--wake
     [ "${1:-}" = "--ptt" ] && { mode=--ptt; typer=""; }
+    # The mode, for the status line (speak079d now): wake, ptt or open.
+    printf '%s\n' "${mode#--}" > "$dir/listenmode"; [ -z "$mode" ] && echo open > "$dir/listenmode"
     # The typer (and with --ptt the key filter); it waits for listen079.
     ( for i in $(seq 1 100); do [ -f "$dir/listen079.pid" ] && break; sleep 0.2; done
       "$here/ptt079" $typer "$kbd" 2>> "$log" ) &
