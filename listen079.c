@@ -986,8 +986,23 @@ int main(int argc, char **argv) {
              * it), 6 dB more while 079 itself is talking. */
             static float gate_db = -1.0f;
             if (gate_db < 0) { const char *g = getenv("LISTEN079_GATE_DB"); gate_db = g ? (float)atof(g) : 8.0f; }
-            float over = speaking() ? gate_db + 6.0f : gate_db;
-            loud = (db > floor_db + over && frames_seen > 50) ? loud + 1 : 0;
+            /* While 079 talks (and 400 ms after, the echo's tail through the
+             * cancellers, the noise remover and the loopback), the floor
+             * counts as at least LISTEN079_SPEAK_FLOOR_DB (default -60).
+             * 079's own voice leaks past the echo cancellers at up to about
+             * -52 dBFS after the noise remover (measured 2026-10-03); the
+             * safetensors DeepFilterNet3 holds silence near -100, so the
+             * floor sat at its -80 clamp and floor + 14 let the leak start
+             * lines. The person's voice (about -31) still breaks in. */
+            static float speak_floor = 1.0f;
+            static long spoke_at = -1000000;
+            if (speak_floor > 0) { const char *g = getenv("LISTEN079_SPEAK_FLOOR_DB"); speak_floor = g ? (float)atof(g) : -60.0f; }
+            int talking = speaking();
+            if (talking) spoke_at = mono_ms();
+            int echo = talking || mono_ms() - spoke_at < 400;
+            float base = echo && floor_db < speak_floor ? speak_floor : floor_db;
+            float over = echo ? gate_db + 6.0f : gate_db;
+            loud = (db > base + over && frames_seen > 50) ? loud + 1 : 0;
             memcpy(pre[pre_at], frame, sizeof frame);
             pre_at = (pre_at + 1) % PRE_FRAMES;
             if (pre_n < PRE_FRAMES) pre_n++;
