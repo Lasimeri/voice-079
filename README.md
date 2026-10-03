@@ -82,3 +82,40 @@ Useful when you are watching a video or on a call.
 - Paths use `$HOME`; device names in `aec-all.conf` are examples (a Yamaha MG-XU mic and a Schiit DAC). Change the two `target.object` lines to your own, found with `pactl list sources short` / `pactl list sinks short`.
 - The echo-canceller only listens; it changes no routing or volumes.
 - This repo expects a working Claude Code install. It is not affiliated with Anthropic.
+
+## Neural noise reduction (`nr079`)
+
+Talk at a normal volume over loud music. After the echo canceller, the mic runs through **DeepFilterNet3**, an open neural noise remover (the nearest Linux equivalent to NVIDIA Broadcast). It strips music, fans and room noise and keeps your voice, so the listener's speech gate opens on quiet speech instead of needing you to shout over the background.
+
+```bash
+mkdir -p nr
+# DeepFilterNet3 LADSPA plugin, prebuilt, model inside (Rikorose/DeepFilterNet)
+curl -L -o nr/libdeep_filter_ladspa.so \
+  https://github.com/Rikorose/DeepFilterNet/releases/download/v0.5.6/libdeep_filter_ladspa-0.5.6-x86_64-unknown-linux-gnu.so
+./nr079 start      # or let `voice079 start` do it
+```
+
+- Chain: mic -> `voice079_mic_all` (WebRTC echo cancel) -> `voice079_mic_nr` (DeepFilterNet) -> listener. The listener picks `voice079_mic_nr` automatically when it exists.
+- Cost: about 30% of one CPU core, real time. A few "underrun" warnings at startup are warm-up, not a fault.
+- `NR079_ATTEN` sets the attenuation limit in dB (default 60). `VOICE079_NR=0` turns it off.
+- Lighter alternative: RNNoise. Build `werman/noise-suppression-for-voice` with `-DBUILD_LADSPA_PLUGIN=ON` (VST/LV2 off), copy `librnnoise_ladspa.so` into `nr/`, then run `NR079_PLUGIN=rnnoise ./nr079 start`.
+
+## Recognition tuning
+
+- **Beam search** (5 beams) instead of greedy decoding: fewer misheard words for a few tens of MB more GPU memory.
+- **Vocabulary prompt**: `VOCAB_PROMPT` in `listen079.c` lists the names and jargon you actually say, as a plain word list rather than sentences, so a hallucinated echo of it can never read as a command. A guard drops any transcript that is just a run of that list. Edit it for your own words.
+- **Name variants**: whisper's common renderings of "Claude" (Kurt, Colonel, Clawed, Clothel, Clod, ...) still count as the wake word.
+
+## Playback behaviour
+
+- **No ducking by default**: your other audio is left alone while 079 speaks. `VOICE079_DUCK=1` brings back the old behaviour (other streams lowered to 79% while speaking).
+- **Where 079 plays**: write a sink name into `$XDG_RUNTIME_DIR/speak-079/playsink` to send the voice somewhere else (for example a null sink streamed to another room). Delete the file to play through `voice079_out` (speakers plus the echo-cancel reference) again.
+
+## Extras
+
+- `extras/two-room/`: talk to the assistant from a second room. `bedroom-mic-in.sh` pulls a remote laptop's echo-cancelled mic into a desktop sink. `audio-to-yg6.sh` streams the 079 voice to that laptop. Both reconnect on their own. Each is a single loop of `pw-record | ssh | pw-cat`.
+- `extras/phi-stream/`: `phi-stream-watchdog.sh` restarts the Intel Phi Stream service when its `diag.md` goes stale while the process is still up (a wedge). It allows a grace period after each start, at most 6 restarts an hour, and leaves the service alone during `improve-measure.sh`. `phi-stream-boot.sh` starts the service and the watchdog at login.
+
+### Remote-machine credentials
+
+Scripts that SSH into the laptops never carry a password. They read it from a private file, `$LAPTOP_SSH_PASS_FILE`, default `~/.config/voice-079/laptop-ssh-pass` (create it yourself with `chmod 600`), through a small askpass helper. SSH keys are better still: with key login set up, none of this is needed.

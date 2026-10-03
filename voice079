@@ -45,11 +45,17 @@ listen() {
     # the music is taken out too (46 dB measured, against 13 for
     # voice079_mic, whose reference is 079 alone); it only listens.
     local src="$mic"
-    if pactl list sources short 2>/dev/null | grep -q "voice079_mic_all"; then
+    # Best first: neural noise reduction (nr079) over the echo canceller.
+    if pactl list sources short 2>/dev/null | grep -q "voice079_mic_nr"; then
+        src=voice079_mic_nr
+    elif pactl list sources short 2>/dev/null | grep -q "voice079_mic_all"; then
         src=voice079_mic_all
     elif pactl list sources short 2>/dev/null | grep -q "voice079_mic"; then
         src=voice079_mic
     fi
+    # VOICE079_SRC overrides the mic (e.g. mix_mic.monitor, the desktop mic
+    # mixed with the bedroom laptop's echo-cancelled mic for two-room input).
+    [ -n "${VOICE079_SRC:-}" ] && src="$VOICE079_SRC"
     echo "voice079: listening through $src" >> "$log"
     parec --device="$src" --format=float32le --rate=16000 --channels=1 --raw 2>> "$log" |
         "$here/listen079" "$model" $mode 2>> "$log" |
@@ -75,6 +81,15 @@ case "${1:-}" in
             setsid pipewire -c "$here/aec-all.conf" > "$HOME/.cache/voice-079/aec-all.log" 2>&1 < /dev/null &
             for _ in 1 2 3 4 5 6 7 8 9 10; do
                 pactl list sources short 2>/dev/null | grep -q "voice079_mic_all" && break
+                sleep 0.3
+            done
+        fi
+        # Neural noise reduction after the canceller (nr079, DeepFilterNet);
+        # VOICE079_NR=0: none. The listener prefers its source when present.
+        if [ "${VOICE079_NR:-1}" != 0 ] && [ -x "$here/nr079" ] && [ -f "$here/nr/libdeep_filter_ladspa.so" ]; then
+            "$here/nr079" start > /dev/null
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+                pactl list sources short 2>/dev/null | grep -q "voice079_mic_nr" && break
                 sleep 0.3
             done
         fi

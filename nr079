@@ -1,0 +1,74 @@
+#!/bin/bash
+# nr079: neural noise reduction for the voice mic (DeepFilterNet3, a LADSPA
+# plugin in ~/tts079/nr, run by a PipeWire filter-chain client). It captures
+# the echo-cancelled mic voice079_mic_all and outputs the source
+# voice079_mic_nr: music, fans and room noise out, voice in, so the listener's
+# gate opens on quiet speech. Only listens; routes and changes nothing.
+#   nr079 start | stop | status
+# NR079_PLUGIN=rnnoise uses RNNoise instead (lighter, less music removal).
+# NR079_ATTEN: DeepFilterNet attenuation limit in dB (default 60).
+set -u
+here=$(dirname "$(readlink -f "$0")")
+rt="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/speak-079"
+mkdir -p "$rt"
+conf="$rt/nr-079.conf" pidf="$rt/nr.pid" log="$HOME/.cache/voice-079/nr.log"
+running() { [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; }
+case "${1:-start}" in
+start)
+    running && { echo "nr079: on"; exit 0; }
+    if [ "${NR079_PLUGIN:-deepfilter}" = rnnoise ]; then
+        node="{ type = ladspa name = rn plugin = \"$here/nr/librnnoise_ladspa.so\" label = noise_suppressor_mono
+                control = { \"VAD Threshold (%)\" = 50.0 \"VAD Grace Period (ms)\" = 200 \"Retroactive VAD Grace (ms)\" = 50 } }"
+    else
+        node="{ type = ladspa name = df plugin = \"$here/nr/libdeep_filter_ladspa.so\" label = deep_filter_mono
+                control = { \"Attenuation Limit (dB)\" = ${NR079_ATTEN:-60} } }"
+    fi
+    # Wait for the echo canceller's source (aec-all), else the capture could
+    # fall back to the raw mic.
+    for _ in $(seq 1 20); do pactl list short sources 2>/dev/null | grep -q voice079_mic_all && break; sleep 0.5; done
+    cat > "$conf" <<EOF
+context.properties = { log.level = 0 }
+context.spa-libs = {
+    audio.convert.* = audioconvert/libspa-audioconvert
+    support.*       = support/libspa-support
+}
+context.modules = [
+    { name = libpipewire-module-rt args = { } flags = [ ifexists nofail ] }
+    { name = libpipewire-module-protocol-native }
+    { name = libpipewire-module-client-node }
+    { name = libpipewire-module-adapter }
+    { name = libpipewire-module-filter-chain
+        args = {
+            node.description = "Voice 079 mic, neural noise reduction"
+            media.name       = "Voice 079 NR"
+            filter.graph = { nodes = [ $node ] }
+            audio.rate = 48000
+            audio.channels = 1
+            audio.position = [ MONO ]
+            capture.props = {
+                node.name = "voice079_nr_capture"
+                target.object = "voice079_mic_all"
+                node.passive = true
+                node.dont-fallback = true
+                stream.dont-remix = true
+            }
+            playback.props = {
+                node.name = "voice079_mic_nr"
+                node.description = "Voice 079 mic, neural noise reduction"
+                media.class = Audio/Source
+            }
+        }
+    }
+]
+EOF
+    setsid pipewire -c "$conf" > "$log" 2>&1 < /dev/null &
+    echo $! > "$pidf"
+    echo "nr079: on (${NR079_PLUGIN:-deepfilter})"
+    ;;
+stop)
+    running && kill "$(cat "$pidf")" 2>/dev/null
+    rm -f "$pidf"; echo "nr079: off"
+    ;;
+status) running && echo "nr079: on" || echo "nr079: off" ;;
+*) echo "nr079 start|stop|status" >&2; exit 1 ;;
+esac

@@ -111,7 +111,10 @@ speaker() {
             sleep 0.1
             continue
         fi
-        [ -s "$dir/ducked" ] || duck
+        # Ducking is opt-in (VOICE079_DUCK=1): the person wants their music
+        # left alone ("blast my music, not you"), and a restore after a
+        # volume change they made while ducked put the old level back.
+        [ "${VOICE079_DUCK:-0}" = 1 ] && { [ -s "$dir/ducked" ] || duck; }
         s=$(cat "$dir/q/$f" 2>/dev/null)
         rm -f "$dir/q/$f"
         [ -n "$s" ] || continue
@@ -126,9 +129,14 @@ speaker() {
             render "$s" "$dir/cur.wav" || continue
         fi
         pre_f=""
-        # Through the echo canceller's output when it is loaded (voice079):
-        # it gives the canceller the exact signal the speakers play.
-        if pactl list sinks short 2>/dev/null | grep -q "voice079_out"; then
+        # Where 079 plays: $dir/playsink names a sink (e.g. o79_net, a silent
+        # desktop sink whose monitor is streamed to the bedroom laptop so 079
+        # comes out there and not on the desktop). Else the echo canceller's
+        # output (voice079_out), which gives the canceller the exact signal.
+        psink=$(cat "$dir/playsink" 2>/dev/null)
+        if [ -n "$psink" ] && pactl list sinks short 2>/dev/null | grep -q "$psink"; then
+            pw-play --target "$psink" "$dir/cur.wav" &
+        elif pactl list sinks short 2>/dev/null | grep -q "voice079_out"; then
             pw-play --target voice079_out "$dir/cur.wav" &
         else
             pw-play "$dir/cur.wav" &

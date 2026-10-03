@@ -25,6 +25,16 @@
 #include <time.h>
 
 #include "whisper.h"
+
+/* whisper's initial prompt: the person's own vocabulary as a plain word list,
+ * so names and jargon come out spelled right ("Claude", not Kurt or Colonel;
+ * "bedroom", not veteran). A list, not sentences: if whisper ever echoes the
+ * prompt back on noise, it cannot read as a command (and is dropped). */
+#define VOCAB_PROMPT "Claude. Claude, SCP-079, Xeon Phi, the Phi stream, the harness, " \
+    "the desktop, the E16 laptop, the bedroom laptop, Yg6, the bedroom, webcam, camera, " \
+    "microphone, speaker, trigger word, Animusic, YouTube, Twitch, OBS, Tailscale, " \
+    "Obsidian, GitHub, Discord, facetrack, Person of Interest, the Machine, Latuda, " \
+    "lurasidone, a commit."
 #ifdef HAVE_SPEAKER
 #include "sherpa-onnx/c-api/c-api.h"
 #endif
@@ -110,6 +120,8 @@ static int filler(const char *t) {
 static char *after_wake_in(char *t, int within) {
     static const char *W[] = {"hey computer", "computer", "hey claude", "claude", "okay claude", "ok claude",
         "hey cloud", "cloud", "claud", "clod", "clon", "clawed", "klaud",
+        /* whisper's other renderings of the name, from the transcripts */
+        "kurt", "colonel", "clothel", "cloth", "klaude", "clyde",
         "zero seven nine", "zero seventy nine", "oh seven nine", "o seven nine", "079", "0 79", "0 7 9", NULL};
     /* The words of t, lowercase, letters and digits only. */
     char norm[256];
@@ -492,7 +504,10 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
     float emb[SPK_MAX];
     int edim = speaker_embed(buf, n, emb);
 #endif
-    struct whisper_full_params wp = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    /* Beam search (5) over greedy: noticeably fewer misheard words for a few
+     * tens of MB more GPU memory (decoder KV per beam, short utterances). */
+    struct whisper_full_params wp = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
+    wp.beam_search.beam_size = 5;
     wp.language = "en";
     wp.n_threads = 8;
     wp.no_context = 1;
@@ -502,7 +517,10 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
     wp.print_timestamps = 0;
     wp.print_special = 0;
     wp.suppress_blank = 1;
-    wp.initial_prompt = "Claude, SCP-079, the Xeon Phi cards, the Phi stream, the lens, the placebo, a commit, Discord.";
+    /* The vocabulary the person actually uses, as a word list (not commands,
+     * so a hallucinated echo of it cannot read as a request). "Claude" came
+     * out as Kurt, Colonel, Clawed, Clothel, Clod; "bedroom" as "veteran". */
+    wp.initial_prompt = VOCAB_PROMPT;
     if (whisper_full(ctx, wp, buf, (int)n) != 0) return;
     char text[4096] = "";
     int segs = whisper_full_n_segments(ctx);
@@ -517,6 +535,20 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
     for (char *c = t; *c; c++) if (*c == '\n' || *c == '\r') *c = ' ';
     if (getenv("LISTEN079_TRACE")) fprintf(stderr, "heard: [%s]\n", t);
     if (hallucination(t)) return;
+    /* The prompt echoed back on noise or silence: a line that is just a run
+     * of the vocabulary list is not the person. */
+    if (strlen(t) > 12) {
+        char lt[512]; size_t k = 0;
+        for (const char *c = t; *c && k + 1 < sizeof lt; c++) lt[k++] = (char)tolower((unsigned char)*c);
+        lt[k] = 0;
+        while (k && (lt[k - 1] == '.' || lt[k - 1] == ' ')) lt[--k] = 0;
+        int commas = 0; for (const char *c = lt; *c; c++) commas += (*c == ',');
+        static char lp[1024];
+        if (commas >= 2) {
+            if (!lp[0]) { size_t m = 0; for (const char *c = VOCAB_PROMPT; *c && m + 1 < sizeof lp; c++) lp[m++] = (char)tolower((unsigned char)*c); lp[m] = 0; }
+            if (strstr(lp, lt)) { fprintf(stderr, "listen079: prompt echo dropped: %s\n", t); return; }
+        }
+    }
     if (!ptt && is_echo(t)) { fprintf(stderr, "listen079: echo dropped: %s\n", t); return; }
     /* The camera gate ("one degree of separation", LISTEN079_FACEGATE=1): a
      * line is sent only when facegate saw the person present and facing the

@@ -8,3 +8,7 @@ tts079_data.h
 # editor/backup
 *.bak*
 *~
+
+# third-party noise-reduction plugins (download/build, see README)
+nr/
+*.so

@@ -21,3 +21,8 @@ if [ "${VOICE079_BOOT_CAM:-1}" != 0 ]; then
         "$HOME/tts079/cam079" view > /dev/null 2>&1
     fi
 fi
+# The two laptops' face-tracked cameras beside these, 2x2 on the camera screen
+# (lapcams.sh; it keeps retrying until each laptop is up). VOICE079_BOOT_LAPCAMS=0: none.
+if [ "${VOICE079_BOOT_LAPCAMS:-1}" != 0 ] && [ -x "$HOME/tts079/lapcams.sh" ]; then
+    setsid "$HOME/tts079/lapcams.sh" > "$HOME/.cache/voice-079/lapcams.log" 2>&1 < /dev/null &
+fi
