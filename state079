@@ -1,0 +1,32 @@
+#!/bin/bash
+# state079: what the assistant was doing, kept on disk so a login brings it
+# back as it was at shutdown (the runtime directory is tmpfs and goes with
+# the session). One KEY=VALUE per line in ~/.local/state/voice-079/state.
+# Written only by the person's own commands (voice079 start/stop, cam079,
+# lapcams.sh, cam-grid-place --layout/--screen, state079 set) and read by the
+# login scripts; never by a stop at shutdown, so a shutdown saves no "off".
+#   state079 get KEY [DEFAULT] | set KEY VALUE | show | snapshot
+# Keys: listen (wake|ptt|open|off), cams (split|view|start|off), lapcams
+# (on|off), layout (featured|grid), screen (DP-2), phi (on|off), volume (40%).
+# snapshot: values that change without a command (079's volume), taken at
+# logout (~/.config/plasma-workspace/shutdown/state079-save.sh).
+set -u
+f="${STATE079_FILE:-$HOME/.local/state/voice-079/state}"
+case "${1:-}" in
+    get)
+        v=$(grep -m1 "^${2:?key}=" "$f" 2>/dev/null | cut -d= -f2-)
+        printf '%s\n' "${v:-${3:-}}"
+        ;;
+    set)
+        mkdir -p "$(dirname "$f")"
+        { grep -v "^${2:?key}=" "$f" 2>/dev/null; printf '%s=%s\n' "$2" "${3?value}"; } > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
+        ;;
+    show)
+        cat "$f" 2>/dev/null
+        ;;
+    snapshot)
+        v=$(pactl get-sink-volume voice079_out 2>/dev/null | grep -o '[0-9]*%' | head -1)
+        [ -n "$v" ] && "$0" set volume "$v"
+        ;;
+    *) echo "state079 get KEY [DEFAULT] | set KEY VALUE | show | snapshot" >&2; exit 1 ;;
+esac

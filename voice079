@@ -111,6 +111,8 @@ case "${1:-}" in
         fi
         rm -f "$dir/listen079.pid"
         setsid "$0" listen "${2:-}" > /dev/null 2>&1 < /dev/null &
+        # The mode kept on disk for the next login (state079).
+        m=${2:-}; m=${m#--}; "$here/state079" set listen "${m:-open}"
         if [ "${2:-}" = "--ptt" ]; then echo "voice079: hold \` to talk ($mic)"; else echo "voice079: listening on $mic, just talk"; fi
         ;;
     listen) listen "${2:-}" ;;
@@ -118,6 +120,7 @@ case "${1:-}" in
         [ -f "$dir/listen.pid" ] && kill -- -"$(cat "$dir/listen.pid")" 2>/dev/null
         rm -f "$dir/listen.pid" "$dir/listen079.pid" "$dir/ptt"
         "$here/speak079d" stop
+        "$here/state079" set listen off
         echo "voice079: stopped"
         ;;
     status)

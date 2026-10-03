@@ -137,3 +137,18 @@ You don't need an enrollment session. Every line you address by name ("Claude, .
 - **Easier to trigger:** a line starts when sound stands `LISTEN079_GATE_DB` (default 8 dB) above the background, 6 dB more while 079 is talking. The name can come anywhere in the first four words ("Okay so, Claude, ...").
 - **Learning finishes the job:** after three lines addressed by name, the voiceprint exists, and the listener turns the trigger word off by itself and says so. "Claude, I'm on the phone" brings it back for a call.
 - **Defaults now:** DeepFilterNet attenuation 100 dB (its maximum) and listener gain +26 dB.
+
+## Everything as it was, after a reboot (`state079`)
+
+KDE's own session restore saves nothing for these programs on Wayland (a test save recorded zero applications), so the assistant keeps its own state on disk, in `~/.local/state/voice-079/state` (one `KEY=VALUE` per line; the runtime directory is tmpfs and is lost at shutdown).
+
+- What is kept: the listening mode (`listen`: wake, ptt, open, off), the cameras (`cams`: split, view, start, off), the laptop feeds (`lapcams`), the camera layout and screen (`layout`, `screen`), whether the Phi Stream starts (`phi`), and 079's volume (`volume`).
+- Only the person's own commands write it: `voice079 start/stop`, `cam079 start/view/split/stop`, `lapcams.sh` and `lapcams.sh stop`, `cam-grid-place --layout/--screen`, `state079 set KEY VALUE`. A shutdown kills everything, and nothing on that path writes, so a shutdown never saves "off". `cam079`'s own restarts use an internal `_stop` for the same reason.
+- `voice079-boot.sh` and `extras/phi-stream/phi-stream-boot.sh` read it at login. With nothing kept they use the defaults: trigger word, both cameras, laptop feeds on, featured layout on DP-2, Phi Stream on, 40%.
+- 079's volume changes without a command, so a logout script records it. Copy `state079-save.sh` to `~/.config/plasma-workspace/shutdown/` (Plasma's `plasma-shutdown` runs that directory).
+
+```bash
+state079 show                 # what the next login will bring back
+state079 set phi off          # keep the Phi Stream from starting at login
+cam-grid-place --layout grid  # kept, and applied now
+```
