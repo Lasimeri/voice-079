@@ -1,0 +1,4 @@
+# ptt079 (~/tts079): the logged-in seat user may read the Corsair K70's
+# keyboard node, so hold-to-talk on ` can take it over and pass every other
+# key through. Only this one device; uaccess becomes an ACL in 73-seat-late.
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_VENDOR_ID}=="1b1c", ENV{ID_MODEL_ID}=="1bb3", ENV{ID_USB_INTERFACE_NUM}=="00", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess"

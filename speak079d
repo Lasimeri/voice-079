@@ -1,0 +1,232 @@
+#!/bin/bash
+# speak079d: say a Claude Code session aloud as it is written, in SCP-079's
+# voice (SBTalker through tts079). One daemon for all sessions: it follows the
+# transcript named in $dir/follow (the session last typed in, set by the
+# UserPromptSubmit hook), turns each new text block into sentences in a spool
+# queue, and says them in order. Each sentence is logged as said, cut (stopped
+# while being said) or dropped (never said), so Claude can be told what was
+# heard (the hook does).
+#   speak079d start     the daemon in the background, unless it runs
+#   speak079d stop      stop it
+#   speak079d cut       stop speaking now and drop what is queued
+#   speak079d now       the sentence being said (a status line)
+#   speak079d say TEXT  queue TEXT (markdown) by hand
+# Off without stopping it: touch ~/.claude/hooks/speak-079.off
+set -u
+dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/speak-079"
+log="$HOME/.local/share/speak-079/spoken.log"
+tts="$HOME/tts079/tts079"
+self="$(readlink -f "$0")"
+mkdir -p "$dir/q" "$(dirname "$log")"
+
+stamp() { date +%Y-%m-%dT%H:%M:%S.%3N; }
+
+# Sentences of a text block (markdown on stdin) into the queue, in order.
+# A new block supersedes what older blocks still have queued: the voice says
+# the latest words, not a backlog (14 sentences were still waiting when the
+# person spoke). Its sentences are named BLOCK-INDEX so they keep their order.
+# Replies (say, say-stdin) pass 0 and append instead: each answers something
+# the person said, and a fast second reply had dropped the first unheard; the
+# prompt hook's drain already drops what was queued before they spoke.
+enqueue() {
+    local b i=0 sup=${1:-1}
+    b=$(date +%s%N)
+    "$tts" --text | while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        if [ $i -eq 0 ]; then
+            for q in "$dir"/q/*.txt; do
+                [ -f "$q" ] || continue
+                # A reply appends (sup 0), but what is still queued from 20 s
+                # ago and more is stale: the person had moved on, and old
+                # answers kept playing over the new questions.
+                if [ "$sup" != 1 ]; then
+                    qb=${q##*/}; qb=${qb%%-*}
+                    [ $(( b - qb )) -gt 20000000000 ] 2>/dev/null || continue
+                fi
+                printf '%s\tdropped\t%s\n' "$(stamp)" "$(cat "$q")" >> "$log"
+                rm -f "$q"
+            done
+        fi
+        printf '%s\n' "$s" > "$dir/q/.in.$b"
+        mv "$dir/q/.in.$b" "$dir/q/$b-$(printf %04d $i).txt"
+        i=$((i + 1))
+    done
+}
+
+# Follow one transcript: each new assistant text block, as it is written.
+feed() {
+    local seen=""
+    tail -n0 -F "$1" 2>/dev/null |
+        jq --unbuffered -j 'select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text + "\u0000"' 2>/dev/null |
+        while IFS= read -r -d '' block; do
+            # The same block written twice is said once.
+            h=$(printf '%s' "$block" | md5sum | cut -c1-32)
+            case " $seen " in *" $h "*) continue ;; esac
+            seen="$(printf '%s\n' $seen | tail -n 7 | tr '\n' ' ')$h"
+            printf '%s' "$block" | enqueue
+        done
+}
+
+# Music ducks while 079 speaks: every playing stream but 079's own and the
+# echo canceller's goes down 6 dB (half its cubic volume step), and back up
+# when the queue is empty. The voice stays clear without being loud ("do
+# not blast").
+duck() {
+    pactl list sink-inputs 2>/dev/null | awk '
+        /^Sink Input #/ {id = substr($3, 2)}
+        /node.name = / {n[id] = $0}
+        /^\tVolume:/ {v[id] = $5}
+        END {for (i in n) if (n[i] !~ /pw-play|echo-cancel/) print i, v[i]}' > "$dir/ducked"
+    while read -r i v; do
+        pactl set-sink-input-volume "$i" "$(( ${v%\%} * 79 / 100 ))%" 2>/dev/null
+    done < "$dir/ducked"
+}
+unduck() {
+    [ -s "$dir/ducked" ] || return
+    while read -r i v; do pactl set-sink-input-volume "$i" "$v" 2>/dev/null; done < "$dir/ducked"
+    : > "$dir/ducked"
+}
+
+# One sentence in 079's voice, into a wav. The voice of the video (Tats
+# TopVideos, SCP Sedition 079), measured: SBTalker at pitch 0 (60 Hz), then
+# pitched down to its 55 Hz median (x0.917), and 1.4x faster: pitch 0 is also
+# SBTalker's slowest, and the person found it too slow (rubberband, pitch and
+# tempo apart).
+render() {
+    local s=$1 out=$2 raw="$2.raw.wav"
+    "$tts" -p "${VOICE079_LEVEL:-0}" -o "$raw" "$s" || return 1
+    ffmpeg -loglevel error -y -i "$raw" -filter_complex "[0:a]aresample=22050,rubberband=pitch=${VOICE079_SHIFT:-0.917}:tempo=${VOICE079_TEMPO:-1.3}:transients=crisp:window=short:formant=preserved,asplit=2[a][b];[b]rubberband=pitch=0.5,volume=${VOICE079_SUB:-0.12}[sub];[a][sub]amix=inputs=2:normalize=0,highpass=f=120,equalizer=f=300:t=q:w=1:g=-4,equalizer=f=2500:t=q:w=1:g=5,equalizer=f=3800:t=q:w=1:g=4,acompressor=threshold=0.1:ratio=3:attack=5:release=80,volume=${VOICE079_GAIN:-2.8},alimiter=limit=0.95[out]" -map "[out]" -c:a pcm_s16le "$out" 2>/dev/null || cp "$raw" "$out"
+}
+
+speaker() {
+    : > "$dir/ducked"
+    # The next sentence is rendered while this one plays (its queue file's
+    # name and text kept with it): the gap between sentences was the render.
+    local pre_f="" pre_s=""
+    while :; do
+        f=$(ls "$dir/q" 2>/dev/null | grep -v '^\.' | sort | head -n 1)
+        if [ -z "$f" ]; then
+            : > "$dir/now"
+            unduck
+            sleep 0.1
+            continue
+        fi
+        [ -s "$dir/ducked" ] || duck
+        s=$(cat "$dir/q/$f" 2>/dev/null)
+        rm -f "$dir/q/$f"
+        [ -n "$s" ] || continue
+        if [ -e "$HOME/.claude/hooks/speak-079.off" ]; then
+            printf '%s\tdropped\t%s\n' "$(stamp)" "$s" >> "$log"
+            continue
+        fi
+        printf '%s' "$s" > "$dir/now"
+        if [ "$f" = "$pre_f" ] && [ "$s" = "$pre_s" ] && [ -s "$dir/pre.wav" ]; then
+            mv -f "$dir/pre.wav" "$dir/cur.wav"
+        else
+            render "$s" "$dir/cur.wav" || continue
+        fi
+        pre_f=""
+        # Through the echo canceller's output when it is loaded (voice079):
+        # it gives the canceller the exact signal the speakers play.
+        if pactl list sinks short 2>/dev/null | grep -q "voice079_out"; then
+            pw-play --target voice079_out "$dir/cur.wav" &
+        else
+            pw-play "$dir/cur.wav" &
+        fi
+        echo $! > "$dir/play.pid"
+        local pid=$!
+        g=$(ls "$dir/q" 2>/dev/null | grep -v '^\.' | sort | head -n 1)
+        if [ -n "$g" ]; then
+            gs=$(cat "$dir/q/$g" 2>/dev/null)
+            [ -n "$gs" ] && render "$gs" "$dir/pre.wav" && { pre_f=$g; pre_s=$gs; }
+        fi
+        wait $pid
+        rc=$?
+        rm -f "$dir/play.pid"
+        if [ $rc -eq 0 ]; then
+            printf '%s\tsaid\t%s\n' "$(stamp)" "$s" >> "$log"
+        else
+            printf '%s\tcut\t%s\n' "$(stamp)" "$s" >> "$log"
+        fi
+    done
+}
+
+run() {
+    echo $$ > "$dir/daemon.pid"
+    speaker &
+    local cur="" fpid=""
+    while :; do
+        f=$(cat "$dir/follow" 2>/dev/null)
+        # A new session to follow, or the follower ended: (re)start it in a
+        # process group of its own, so tail and jq go with it.
+        # Following the transcript is off unless $dir/feed-on exists: its writes
+        # came late and twice, and old sentences were spoken over new ones; the
+        # Stop hook hands each reply over instead (say-stdin).
+        [ -e "$dir/feed-on" ] || f=""
+        if [ -n "$f" ] && { [ "$f" != "$cur" ] || ! kill -0 "$fpid" 2>/dev/null; }; then
+            [ -n "$fpid" ] && kill -- -"$fpid" 2>/dev/null
+            cur=$f
+            setsid "$self" feed "$cur" &
+            fpid=$!
+            echo "$fpid" > "$dir/feed.pid"
+        fi
+        sleep 1
+    done
+}
+
+case "${1:-}" in
+    feed) feed "$2" ;;
+    run) run ;;
+    start)
+        if [ -f "$dir/daemon.pid" ] && kill -0 "$(cat "$dir/daemon.pid")" 2>/dev/null; then exit 0; fi
+        setsid "$self" run > /dev/null 2>&1 < /dev/null &
+        ;;
+    stop)
+        "$self" cut
+        # The feeder runs in a process group of its own: it goes too (left
+        # alive, each restart had added one more, and every block was queued
+        # by each).
+        [ -f "$dir/feed.pid" ] && kill -- -"$(cat "$dir/feed.pid")" 2>/dev/null
+        [ -f "$dir/daemon.pid" ] && kill -- -"$(cat "$dir/daemon.pid")" 2>/dev/null
+        rm -f "$dir/daemon.pid" "$dir/feed.pid"
+        ;;
+    drain)
+        # What is queued goes (logged dropped); the sentence being said
+        # finishes (a new message lets 079 end its sentence). With BEFORE
+        # (nanoseconds since the epoch), only what was queued before then
+        # goes: a reply written after the person spoke is theirs to hear.
+        before=${2:-}
+        for q in "$dir"/q/*.txt; do
+            [ -f "$q" ] || continue
+            b=${q##*/}; b=${b%%-*}
+            [ -n "$before" ] && [ "$b" -ge "$before" ] 2>/dev/null && continue
+            printf '%s\tdropped\t%s\n' "$(stamp)" "$(cat "$q")" >> "$log"
+            rm -f "$q"
+        done
+        ;;
+    cut)
+        for q in "$dir"/q/*.txt; do
+            [ -f "$q" ] || continue
+            printf '%s\tdropped\t%s\n' "$(stamp)" "$(cat "$q")" >> "$log"
+            rm -f "$q"
+        done
+        [ -f "$dir/play.pid" ] && kill "$(cat "$dir/play.pid")" 2>/dev/null
+        ;;
+    now)
+        s=$(cat "$dir/now" 2>/dev/null)
+        p=$(cat "$dir/ptt" 2>/dev/null)
+        if [ "$p" = "muted" ]; then printf '079 · muted (number pad period)\n'
+        elif [ "$p" = "listening" ]; then printf '079 · listening to you\n'
+        elif [ -n "$s" ]; then printf '079 ▸ %s\n' "$s"
+        else printf '079 · silent\n'; fi
+        ;;
+    say-stdin) enqueue 0 ;;
+    say)
+        shift
+        printf '%s' "$*" | enqueue 0
+        ;;
+    *)
+        echo "speak079d start|stop|cut|now|say TEXT" >&2
+        exit 1
+        ;;
+esac

@@ -1,0 +1,10 @@
+# build artifacts
+tts079
+ptt079
+listen079
+*.o
+# generated from the voice addon
+tts079_data.h
+# editor/backup
+*.bak*
+*~

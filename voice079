@@ -1,0 +1,107 @@
+#!/bin/bash
+# voice079: talk with Claude Code by voice, all local. The microphone (the
+# Yamaha MG-XU by default) through listen079 (whisper.cpp in-process on the
+# GPU) types what you say into the Konsole session Claude Code runs in, and
+# presses Enter; Claude's replies come back in SCP-079's voice (speak079d).
+#   voice079 start [--ptt] | stop | status
+# Open mic by default: the noise gate finds each utterance, nothing to press.
+# --ptt: hold ` on the K70 instead (ptt079 takes the keyboard over
+# and passes every other key through; a quick tap still types `).
+# Either way ptt079 types what was heard into the Claude Code window (claude-focus moves the focus there for the line and back).
+# The session typed into: the one the UserPromptSubmit hook last saw
+# ($dir/konsole), else this shell's own Konsole session.
+set -u
+dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/speak-079"
+here="$(dirname "$(readlink -f "$0")")"
+model="${VOICE079_MODEL:-$HOME/models/whisper/ggml-large-v3-turbo.bin}"
+mic="${VOICE079_MIC:-alsa_input.usb-Yamaha_Corporation_MG-XU-00.analog-stereo}"
+kbd="${VOICE079_KBD:-/dev/input/by-id/usb-Corsair_CORSAIR_K70_RGB_PRO_Mechanical_Gaming_Keyboard_F500190262A90F81AB7580A00B00D00E-event-kbd}"
+log="$HOME/.local/share/speak-079/listen.log"
+mkdir -p "$dir" "$(dirname "$log")"
+
+# What was heard, typed into the Claude Code window by ptt079's virtual keyboard
+# (Konsole 26.08 refuses D-Bus sendText: its security-sensitive D-Bus API is
+# off by default, and every utterance had been dropped there).
+type_into_claude() {
+    [ -p "$dir/type.fifo" ] || { echo "voice079: no typer (ptt079 not running)" >> "$log"; return 1; }
+    printf '%s\n' "$1" > "$dir/type.fifo"
+}
+
+listen() {
+    echo $$ > "$dir/listen.pid"
+    # Open mic, everything heard sent (the noise gate finds each utterance);
+    # --wake: only after "079"/"computer"; --ptt: hold `.
+    # The keyboard taken and passed through, the number pad's period a mute
+    # (ptt079 --mute); VOICE079_TYPER=--type-only leaves it untaken.
+    local mode="" typer=${VOICE079_TYPER:---mute}
+    [ "${1:-}" = "--wake" ] && mode=--wake
+    [ "${1:-}" = "--ptt" ] && { mode=--ptt; typer=""; }
+    # The typer (and with --ptt the key filter); it waits for listen079.
+    ( for i in $(seq 1 100); do [ -f "$dir/listen079.pid" ] && break; sleep 0.2; done
+      "$here/ptt079" $typer "$kbd" 2>> "$log" ) &
+    # The echo-cancelled mic when the canceller is loaded (start loads it):
+    # the raw MG-XU heard 079 from the speakers 30 dB louder. voice079_mic_all
+    # first (aec-all.conf): its reference is everything the DAC plays, so
+    # the music is taken out too (46 dB measured, against 13 for
+    # voice079_mic, whose reference is 079 alone); it only listens.
+    local src="$mic"
+    if pactl list sources short 2>/dev/null | grep -q "voice079_mic_all"; then
+        src=voice079_mic_all
+    elif pactl list sources short 2>/dev/null | grep -q "voice079_mic"; then
+        src=voice079_mic
+    fi
+    echo "voice079: listening through $src" >> "$log"
+    parec --device="$src" --format=float32le --rate=16000 --channels=1 --raw 2>> "$log" |
+        "$here/listen079" "$model" $mode 2>> "$log" |
+        while IFS= read -r said; do
+            [ -n "$said" ] || continue
+            printf '%s\theard\t%s\n' "$(date +%Y-%m-%dT%H:%M:%S.%3N)" "$said" >> "$HOME/.local/share/speak-079/spoken.log"
+            type_into_claude "[voice] $said"
+        done
+}
+
+case "${1:-}" in
+    start)
+        # WebRTC echo cancellation (PipeWire, local): 079 plays through
+        # voice079_out, the mic is heard through voice079_mic with it removed.
+        if ! pactl list sources short 2>/dev/null | grep -q "voice079_mic"; then
+            pactl load-module module-echo-cancel aec_method=webrtc \
+                source_master="$mic" sink_master="${VOICE079_SPEAKERS:-$(pactl get-default-sink)}" \
+                source_name=voice079_mic sink_name=voice079_out > "$dir/aec.module" 2>> "$log"
+        fi
+        # The canceller of everything playing (a PipeWire client of its own,
+        # aec-all.conf; VOICE079_AEC_ALL=0: none).
+        if [ "${VOICE079_AEC_ALL:-1}" != 0 ] && ! pactl list sources short 2>/dev/null | grep -q "voice079_mic_all"; then
+            setsid pipewire -c "$here/aec-all.conf" > "$HOME/.cache/voice-079/aec-all.log" 2>&1 < /dev/null &
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+                pactl list sources short 2>/dev/null | grep -q "voice079_mic_all" && break
+                sleep 0.3
+            done
+        fi
+        "$here/speak079d" start
+        if [ -f "$dir/listen.pid" ] && kill -0 "$(cat "$dir/listen.pid")" 2>/dev/null; then
+            echo "voice079: already listening"; exit 0
+        fi
+        [ -f "$model" ] || { echo "voice079: no model at $model" >&2; exit 1; }
+        if [ ! -r "$kbd" ]; then
+            echo "voice079: cannot read $kbd: install 70-ptt079.rules (see its header)" >&2
+            exit 1
+        fi
+        rm -f "$dir/listen079.pid"
+        setsid "$0" listen "${2:-}" > /dev/null 2>&1 < /dev/null &
+        if [ "${2:-}" = "--ptt" ]; then echo "voice079: hold \` to talk ($mic)"; else echo "voice079: listening on $mic, just talk"; fi
+        ;;
+    listen) listen "${2:-}" ;;
+    stop)
+        [ -f "$dir/listen.pid" ] && kill -- -"$(cat "$dir/listen.pid")" 2>/dev/null
+        rm -f "$dir/listen.pid" "$dir/listen079.pid" "$dir/ptt"
+        "$here/speak079d" stop
+        echo "voice079: stopped"
+        ;;
+    status)
+        if [ -f "$dir/listen.pid" ] && kill -0 "$(cat "$dir/listen.pid")" 2>/dev/null; then echo "listening"; else echo "not listening"; fi
+        "$here/speak079d" now
+        tail -n 3 "$log" 2>/dev/null
+        ;;
+    *) echo "voice079 start [--ptt] | stop | status" >&2; exit 1 ;;
+esac

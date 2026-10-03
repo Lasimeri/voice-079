@@ -1,0 +1,60 @@
+#!/bin/bash
+# claude-focus: what is heard goes to Claude Code, whatever window has the
+# focus. ptt079 types through a virtual keyboard, and the compositor gives
+# keys to the focused window only, so around each typed line:
+#   claude-focus in    the Claude Code window (the Konsole the prompt hook
+#                      named in $dir/konsole) takes the focus; the window
+#                      that had it is remembered
+#   claude-focus out   that window gets the focus back
+# Through KWin scripts (qdbus6); a script's print goes to the journal, which
+# is how the window it found comes back. No Claude Code window known: no-op.
+set -u
+dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/speak-079"
+scr="$dir/focus.js"
+
+kwin_run() {
+    local id
+    id=$(qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript "$scr" "focus079-$1") || return 1
+    qdbus6 org.kde.KWin "/Scripting/Script$id" org.kde.kwin.Script.run > /dev/null 2>&1
+    qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript "focus079-$1" > /dev/null 2>&1
+}
+
+case "${1:-}" in
+    in)
+        read -r svc _ < "$dir/konsole" 2>/dev/null || exit 0
+        pid=$(busctl --user call org.freedesktop.DBus / org.freedesktop.DBus GetConnectionUnixProcessID s "$svc" 2>/dev/null | awk '{print $2}')
+        [ -n "$pid" ] || exit 0
+        nonce=$RANDOM$RANDOM
+        cat > "$scr" <<EOF
+var a = workspace.activeWindow, cc = null, ws = workspace.windowList();
+for (var i = 0; i < ws.length; i++) if (ws[i].pid == $pid && ws[i].normalWindow) { cc = ws[i]; break; }
+var moved = cc && a !== cc;
+print("FOCUS079 $nonce " + (moved && a ? a.internalId : "-"));
+if (moved) { cc.minimized = false; workspace.activeWindow = cc; }
+EOF
+        kwin_run in || exit 0
+        # The window it took the focus from, for `out`.
+        rm -f "$dir/focus-prev"
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+            prev=$(journalctl --user -n 60 -o cat 2>/dev/null | grep -a "FOCUS079 $nonce " | tail -n 1 | awk '{print $3}')
+            [ -n "$prev" ] && break
+            timeout 0.05 tail -f /dev/null
+        done
+        [ -n "${prev:-}" ] && [ "$prev" != "-" ] && printf '%s\n' "$prev" > "$dir/focus-prev"
+        ;;
+    out)
+        [ -s "$dir/focus-prev" ] || exit 0
+        prev=$(cat "$dir/focus-prev")
+        rm -f "$dir/focus-prev"
+        cat > "$scr" <<EOF
+var ws = workspace.windowList();
+for (var i = 0; i < ws.length; i++) if (String(ws[i].internalId) == "$prev") { workspace.activeWindow = ws[i]; break; }
+EOF
+        kwin_run out
+        ;;
+    *)
+        echo "claude-focus in|out" >&2
+        exit 1
+        ;;
+esac
+exit 0
