@@ -1,0 +1,30 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>body{margin:0;background:#0d1117;} .mermaid{padding:24px;}</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+</head><body><pre class="mermaid">
+flowchart LR
+  subgraph You
+    MIC["Yamaha MG-XU mic"]
+    SPK["Schiit Modi 3 + stereo"]
+    KB["K70 keyboard"]
+    PHONE["OnePlus Open (Discord)"]
+  end
+  subgraph Local["This PC, all local"]
+    AEC["PipeWire WebRTC echo cancel<br/>voice079_mic / voice079_out"]
+    L["listen079<br/>noise gate + wake word<br/>whisper.cpp large-v3-turbo, GPU"]
+    T["ptt079<br/>uinput typer (US layout, Caps-aware)"]
+    CC["Claude Code<br/>(Konsole, --channels discord)"]
+    H1["UserPromptSubmit hook<br/>cut speech, report what was heard, now playing"]
+    H2["Stop hook<br/>final reply"]
+    S["speak079d<br/>queue, music ducking"]
+    TTS["tts079<br/>SBTalker port, pitch 0"]
+    FX["ffmpeg: pitch x0.917, tempo 1.4,<br/>octave layer, EQ, compressor, limiter"]
+    DESK["desk MCP<br/>screenshots, mouse, keys"]
+  end
+  MIC --> AEC --> L --> T --> CC
+  CC --> H1
+  CC --> H2 --> S --> TTS --> FX --> AEC --> SPK
+  PHONE <--> |"bot DMs"| CC
+  CC --> DESK
+  KB -.-> |"hold ` (push-to-talk mode)"| T
+</pre><script>mermaid.initialize({startOnLoad:true, theme:'dark'});</script></body></html>

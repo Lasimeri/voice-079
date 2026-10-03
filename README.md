@@ -114,7 +114,17 @@ curl -L -o nr/libdeep_filter_ladspa.so \
 ## Extras
 
 - `extras/two-room/`: talk to the assistant from a second room. `bedroom-mic-in.sh` pulls a remote laptop's echo-cancelled mic into a desktop sink. `audio-to-yg6.sh` streams the 079 voice to that laptop. Both reconnect on their own. Each is a single loop of `pw-record | ssh | pw-cat`.
-- `extras/phi-stream/`: `phi-stream-watchdog.sh` restarts the Intel Phi Stream service when its `diag.md` goes stale while the process is still up (a wedge). It allows a grace period after each start, at most 6 restarts an hour, and leaves the service alone during `improve-measure.sh`. `phi-stream-boot.sh` starts the service and the watchdog at login.
+- `extras/two-room/netlisten.sh`: hear the person through a laptop's microphone, recognised on the desktop's GPU. The laptop streams f32le 16 kHz mono to a TCP port here, and each line goes to the same typer FIFO.
+- `extras/phi-stream/`: `phi-stream-watchdog.sh` restarts the Intel Phi Stream service when its `diag.md` goes stale while the process is still up (a wedge). It allows a grace period to any service younger than 7 minutes, whoever started it, at most 6 restarts an hour, and leaves the service alone during `improve-measure.sh`. `phi-stream-boot.sh` starts the service and the watchdog at login. Every start goes through the repository's own `scripts/phi-stream.sh` with one options file, `phi-stream.opts`. `ptracer.c` (`gcc -shared -fPIC -o libptracer.so ptracer.c`) is preloaded into the service (`PHI_STREAM_PRELOAD`) so the watchdog's gdb can take a stuck service's stacks under Yama `ptrace_scope=1`.
+- `extras/phi-stream/tools/`: Claude's side of developing the stream.
+  - `await-review.sh`: the review gate. It returns when a candidate passes its sandbox or the stream writes to Claude, so a Claude Code session reviews and re-arms it.
+  - `stall-probe.sh` + `stall.gdb`: at 45 s of a stale `diag.md`, count with gdb breakpoints whether the engine still calls `write_status_file`. This is how the 2026-10-03 "wedges" were shown to be the model resting.
+  - `*-windows.sh`, `ab-check.awk`, `loopiness.c`, `lens-lines.c`, `window-count.c`: interleaved A/B measurement of the live stream (loopiness, guide KL, rates).
+  - `guide-rate-ab.sh`: throughput with the guide lane on and off.
+  - `mcp-call.sh`: one MCP call to the stream's management server.
+  - `restart-cc.sh`: reopen Claude Code in the same conversation.
+- `extras/sonic-seasoning/` (paused): `straw.sh` makes a "sweet" soundtrack after Spence's crossmodal findings (high register, consonant major harmony, soft bell attacks). `strawberry-layer.sh` loops it under whatever music an MPRIS player is playing, and only then: never alone. Unfinished: the level is far too low (about -49 LUFS).
+- `docs/voice079.mmd` (+ `.html`, `.png`): the pipeline diagram.
 
 ### Remote-machine credentials
 
