@@ -115,6 +115,23 @@ static int filler(const char *t) {
     return 1;
 }
 
+/* Whether the word p (length n) is at most one edit (substitution,
+ * insertion, deletion) from w. */
+static int lev1(const char *p, size_t n, const char *w) {
+    size_t m = strlen(w), i = 0, j = 0;
+    int edits = 0;
+    if (n > m + 1 || m > n + 1) return 0;
+    while (i < n && j < m) {
+        if (p[i] == w[j]) { i++; j++; continue; }
+        if (++edits > 1) return 0;
+        if (n > m) i++;
+        else if (m > n) j++;
+        else { i++; j++; }
+    }
+    edits += (int)(n - i) + (int)(m - j);
+    return edits <= 1;
+}
+
 /* After a wake word within the first `within` words of t: the rest (maybe
  * empty), or NULL. */
 static char *after_wake_in(char *t, int within) {
@@ -122,34 +139,64 @@ static char *after_wake_in(char *t, int within) {
         "hey cloud", "cloud", "claud", "clod", "clon", "clawed", "klaud",
         /* whisper's other renderings of the name, from the transcripts */
         "kurt", "colonel", "clothel", "cloth", "klaude", "clyde",
+        "claudius", "flaude", "clauda", "claudia", "clawd", "clode",
         "zero seven nine", "zero seventy nine", "oh seven nine", "o seven nine", "079", "0 79", "0 7 9", NULL};
-    /* The words of t, lowercase, letters and digits only. */
+    /* The words of t, lowercase, letters and digits only; an apostrophe
+     * inside a word is dropped, not a break ("that's" is one word: split,
+     * it pushed "Okay, that's perfect. Claude, ..." past the limit). A word
+     * that follows . ? or ! starts a sentence. */
     char norm[256];
-    int starts[64], at[64], nw = 0;
+    int starts[64], at[64], sentence[64], nw = 0;
     size_t n = 0;
-    int in = 0;
+    int in = 0, stop = 1;
     for (char *c = t; *c && n + 2 < sizeof norm && nw < 64; c++) {
         if (isalnum((unsigned char)*c)) {
-            if (!in) { if (n) norm[n++] = ' '; at[nw] = (int)n; starts[nw++] = (int)(c - t); in = 1; }
+            if (!in) {
+                if (n) norm[n++] = ' ';
+                at[nw] = (int)n; starts[nw] = (int)(c - t); sentence[nw] = stop; nw++;
+                in = 1; stop = 0;
+            }
             norm[n++] = (char)tolower((unsigned char)*c);
-        } else in = 0;
+        } else if (in && *c == '\'' && isalpha((unsigned char)c[1])) {
+            /* ' between letters */
+        } else if (in && (unsigned char)c[0] == 0xe2 && (unsigned char)c[1] == 0x80 &&
+                   (unsigned char)c[2] == 0x99 && isalpha((unsigned char)c[3])) {
+            c += 2;   /* U+2019 between letters */
+        } else {
+            in = 0;
+            if (*c == '.' || *c == '?' || *c == '!') stop = 1;
+        }
     }
     norm[n] = 0;
-    /* The name within the first three words: "Hello? Claude, are you
-     * there?" was dropped when it had to come first. */
-    for (int s = 0; s < nw && s < within; s++) {
+    /* The name within the first `within` words ("Hello? Claude, are you
+     * there?" was dropped when it had to come first), or opening any
+     * sentence ("Okay, that's perfect. Claude, pause VLC"). */
+    for (int s = 0; s < nw; s++) {
+        if (s >= within && !sentence[s]) continue;
         const char *p = norm + at[s];
+        size_t wl = strcspn(p, " ");
+        int words = 0;
         for (int k = 0; W[k]; k++) {
             size_t l = strlen(W[k]);
             if (strncmp(p, W[k], l) != 0 || (p[l] && p[l] != ' ')) continue;
-            /* "Claude Code" (or "Cloud Code") is the program's name, not a call:
-             * said in passing, it stopped 079 mid-sentence. */
-            if (!strncmp(p + l, " code", 5) && (p[l + 5] == 0 || p[l + 5] == ' ')) continue;
-            int words = 1;
+            words = 1;
             for (const char *c = W[k]; *c; c++) if (*c == ' ') words++;
-            if (s + words >= nw) return t + strlen(t);
-            return t + starts[s + words];
+            break;
         }
+        /* "Carl" only as the line's first word ("Carl, pause VLC" was
+         * Claude): anywhere else it is a name. */
+        if (!words && s == 0 && wl == 4 && !strncmp(p, "carl", 4)) words = 1;
+        /* One letter off "claude" (flaude, clauda, glaude, claudes), but not
+         * the word "clause". */
+        if (!words && wl >= 5 && wl <= 7 && strncmp(p, "clause", 6) && lev1(p, wl, "claude")) words = 1;
+        if (!words) continue;
+        /* "Claude Code" (or "Cloud Code") is the program's name, not a call:
+         * said in passing, it stopped 079 mid-sentence. */
+        const char *e = p;
+        for (int w = 0; w < words; w++) { e += strcspn(e, " "); if (*e) e++; }
+        if (!strncmp(e, "code", 4) && (e[4] == 0 || e[4] == ' ')) continue;
+        if (s + words >= nw) return t + strlen(t);
+        return t + starts[s + words];
     }
     return NULL;
 }

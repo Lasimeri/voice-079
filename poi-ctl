@@ -1,0 +1,25 @@
+#!/bin/bash
+# poi-ctl: drive the mpv playing on the E16 laptop's CRT (started with
+# --input-ipc-server=/run/user/1000/poi.sock) from the desktop.
+#   poi-ctl pause | play | toggle | pos | seek SECONDS | back [N] | fwd [N] | status | quit
+# The JSON goes over ssh's stdin into socat on the laptop (whose login shell
+# is fish, so no remote loops or quoting).
+ip=${E16_IP:-192.168.0.78}
+A="$HOME/.cache/voice-079/laptop-askpass.sh"
+O=(-o PreferredAuthentications=password -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1
+   -o ConnectTimeout=8 -o StrictHostKeyChecking=no)
+get() { printf '{"command":["get_property","%s"]}\n' "$1"; }
+case "${1:-}" in
+    pause) j='{"command":["set_property","pause",true]}' ;;
+    play) j='{"command":["set_property","pause",false]}' ;;
+    toggle) j='{"command":["cycle","pause"]}' ;;
+    pos) j=$(get time-pos) ;;
+    seek) j="{\"command\":[\"seek\",${2:?seconds},\"absolute\"]}" ;;
+    back) j="{\"command\":[\"seek\",-${2:-10}]}" ;;
+    fwd) j="{\"command\":[\"seek\",${2:-10}]}" ;;
+    status) j=$(get time-pos; get pause; get fullscreen; get display-names; get volume) ;;
+    quit) j='{"command":["quit"]}' ;;
+    *) echo "poi-ctl pause|play|toggle|pos|seek S|back [N]|fwd [N]|status|quit" >&2; exit 1 ;;
+esac
+printf '%s\n' "$j" | SSH_ASKPASS="$A" SSH_ASKPASS_REQUIRE=force \
+    ssh "${O[@]}" "lasimeri@$ip" "socat - /run/user/1000/poi.sock"
