@@ -5,8 +5,14 @@
 # voice079_mic_nr: music, fans and room noise out, voice in, so the listener's
 # gate opens on quiet speech. Only listens; routes and changes nothing.
 #   nr079 start | stop | status
-# NR079_PLUGIN=rnnoise uses RNNoise instead (lighter, less music removal).
-# NR079_ATTEN: DeepFilterNet attenuation limit in dB (default 60).
+# The plugin (NR079_PLUGIN):
+#   safetensors (default): DeepFilterNet3 in C, nr-st/libdeep_filter_st_ladspa.so,
+#     weights from nr-st/model.safetensors (MIT; within 1 LSB of the
+#     reference DFN3, 1.4 ms CPU per 10 ms hop, 40 ms latency).
+#   deepfilter: the Rust v0.5.6 plugin, DeepFilterNet3_ll from an embedded
+#     ONNX (5.7 ms per hop; its latency grows 480 samples per underrun).
+#   rnnoise: RNNoise (lighter, less music removal).
+# NR079_ATTEN: DeepFilterNet attenuation limit in dB (default 100).
 set -u
 here=$(dirname "$(readlink -f "$0")")
 rt="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/speak-079"
@@ -16,12 +22,15 @@ running() { [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; }
 case "${1:-start}" in
 start)
     running && { echo "nr079: on"; exit 0; }
-    if [ "${NR079_PLUGIN:-deepfilter}" = rnnoise ]; then
+    plugin=${NR079_PLUGIN:-safetensors}
+    if [ "$plugin" = rnnoise ]; then
         node="{ type = ladspa name = nr plugin = \"$here/nr/librnnoise_ladspa.so\" label = noise_suppressor_mono
                 control = { \"VAD Threshold (%)\" = 50.0 \"VAD Grace Period (ms)\" = 200 \"Retroactive VAD Grace (ms)\" = 50 } }"
         nin="nr:Input" nout="nr:Output"
     else
-        node="{ type = ladspa name = nr plugin = \"$here/nr/libdeep_filter_ladspa.so\" label = deep_filter_mono
+        so=$here/nr-st/libdeep_filter_st_ladspa.so
+        [ "$plugin" = deepfilter ] && so=$here/nr/libdeep_filter_ladspa.so
+        node="{ type = ladspa name = nr plugin = \"$so\" label = deep_filter_mono
                 control = { \"Attenuation Limit (dB)\" = ${NR079_ATTEN:-100} } }"
         nin="nr:Audio In" nout="nr:Audio Out"
     fi
@@ -83,7 +92,7 @@ context.modules = [
 EOF
     setsid pipewire -c "$conf" > "$log" 2>&1 < /dev/null &
     echo $! > "$pidf"
-    echo "nr079: on (${NR079_PLUGIN:-deepfilter})"
+    echo "nr079: on ($plugin)"
     ;;
 stop)
     running && kill "$(cat "$pidf")" 2>/dev/null
