@@ -421,7 +421,8 @@ static void out_text(const char *t) {
 #define SPK_MAX 1024
 #define ENROLL_N 6
 static const SherpaOnnxSpeakerEmbeddingExtractor *spk;
-static float voiceprint[SPK_MAX], enr_sum[SPK_MAX];
+static float voiceprint[SPK_MAX], enr_sum[SPK_MAX], pas_sum[SPK_MAX];
+static int pas_n, vp_updates;
 static int spk_dim, have_vp, enrolling, enr_n;
 static char vp_path[600], spk_log[600];
 
@@ -489,6 +490,40 @@ static void speaker_enroll(const float *e) {
     have_vp = 1;
     enrolling = 0;
     fprintf(stderr, "listen079: voiceprint learned from %d lines\n", enr_n);
+}
+
+/* Passive learning, no enrollment session: a line that names Claude is the
+ * person (songs, videos and the TV do not say it), so its embedding (unit
+ * length) teaches the voiceprint. With none yet, PAS_N such lines make one;
+ * after that each nudges it by 8%, but only if it already sounds like them
+ * (similarity >= 0.30), so someone else saying the name cannot steer it.
+ * With a voiceprint, lines in other voices are dropped in every mode, so the
+ * trigger word stops being needed against music and video. */
+#define PAS_N 5
+static void speaker_learn(const float *e, float sim) {
+    if (!have_vp) {
+        for (int i = 0; i < spk_dim; i++) pas_sum[i] += e[i];
+        if (++pas_n < PAS_N) return;
+        double s = 0;
+        for (int i = 0; i < spk_dim; i++) s += (double)pas_sum[i] * pas_sum[i];
+        s = sqrt(s) + 1e-9;
+        for (int i = 0; i < spk_dim; i++) voiceprint[i] = (float)(pas_sum[i] / s);
+        FILE *f = fopen(vp_path, "wb");
+        if (f) { fwrite(voiceprint, sizeof(float), spk_dim, f); fclose(f); }
+        have_vp = 1;
+        fprintf(stderr, "listen079: voiceprint learned passively from %d addressed lines\n", pas_n);
+        say_079("I know your voice now. You can drop the trigger word: I'll ignore voices that aren't yours.");
+        return;
+    }
+    if (sim < 0.30f) return;
+    double s = 0;
+    for (int i = 0; i < spk_dim; i++) { voiceprint[i] = 0.92f * voiceprint[i] + 0.08f * e[i]; s += (double)voiceprint[i] * voiceprint[i]; }
+    s = sqrt(s) + 1e-9;
+    for (int i = 0; i < spk_dim; i++) voiceprint[i] = (float)(voiceprint[i] / s);
+    if (++vp_updates % 5 == 0) {
+        FILE *f = fopen(vp_path, "wb");
+        if (f) { fwrite(voiceprint, sizeof(float), spk_dim, f); fclose(f); }
+    }
 }
 #endif
 
@@ -599,6 +634,12 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
             speaker_enroll(emb);
             if (!enrolling) say_079("I've learned your voice.");
             return;
+        }
+        /* A line addressed by name teaches the voiceprint (LISTEN079_NO_LEARN
+         * turns this off). */
+        if (r && !getenv("LISTEN079_NO_LEARN")) {
+            speaker_learn(emb, sim);
+            if (have_vp) sim = speaker_sim(emb);   /* the line that completed it is judged against it */
         }
         const char *mins = getenv("LISTEN079_SPEAKER_MIN");
         float min = mins ? (float)atof(mins) : 0.40f;

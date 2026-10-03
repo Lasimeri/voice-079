@@ -121,3 +121,11 @@ curl -L -o nr/libdeep_filter_ladspa.so \
 Scripts that SSH into the laptops never carry a password. They read it from a private file, `$LAPTOP_SSH_PASS_FILE`, default `~/.config/voice-079/laptop-ssh-pass` (create it yourself with `chmod 600`), through a small askpass helper. SSH keys are better still: with key login set up, none of this is needed.
 
 **Gain for the listener.** `nr079` adds gain after the noise remover (`NR079_GAIN_DB`, default 18 dB) and a limiter at full scale. It applies only to what the assistant hears: the mic's own level, which Discord and other programs use, is untouched. Measure what reaches the listener with `parec --device=voice079_mic_nr --format=float32le --rate=16000 --channels=1 --raw`. Speech should land around -30 to -20 dBFS.
+
+## Your voice, learned passively
+
+You don't need an enrollment session. Every line you address by name ("Claude, ...") is certainly you, because songs, videos and the TV don't say it, so it teaches your voiceprint (CAM++ speaker embeddings through sherpa-onnx). After 5 such lines the voiceprint exists, saved to `~/.local/share/speak-079/voiceprint.f32`, and the assistant says so. From then on, every line in another voice is dropped in every mode. That means you can turn the trigger word off while music or a video plays: their voices don't match yours. Each later addressed line nudges the voiceprint by 8%, but only if it already sounds like you (similarity >= 0.30), so someone else saying the name can't steer it.
+
+- `LISTEN079_SPEAKER_MIN` is the similarity below which a line is dropped (default 0.40). `speaker.log` records every line's similarity, so you can tune it from real data.
+- `LISTEN079_NO_LEARN=1` turns off passive learning. "Claude, learn my voice" still enrolls explicitly (6 lines); "Claude, forget my voice" deletes the voiceprint.
+- Phone mode stays name-only, because on a call it's your own voice that should be ignored.
