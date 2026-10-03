@@ -1,1 +1,1 @@
--c 204800 --kv-q8 --frame agent --temp 0.5 --top-p 0.95 --min-p 0.05 --guide --goal-probe --chain-against --improve
+-c 204800 --kv-q8 --frame agent --temp 0.5 --top-p 0.95 --min-p 0.05 --guide --goal-probe --chain-audit --improve
