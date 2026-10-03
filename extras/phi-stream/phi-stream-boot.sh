@@ -12,16 +12,11 @@ for _ in $(seq 1 60); do nvidia-smi -L >/dev/null 2>&1 && break; sleep 2; done
 sleep 5
 # Restart the service if it wedges (diag.md stale while the process is up).
 setsid "$HOME/tts079/phi-stream-watchdog.sh" > /dev/null 2>&1 < /dev/null &
-# Started by the watchdog's own launcher: the one command line for both a
-# login and a restart after a wedge (same flags, libptracer.so preloaded so a
-# wedge's thread stacks can be taken), never two copies drifting apart.
-"$HOME/tts079/phi-stream-watchdog.sh" restart
-# Its terminal window on the desktop once the model is running (what
-# `phi-stream.sh start` did; the window reconnects across restarts and
-# reloads onto new builds). PHI_STREAM_WINDOW=0: none. At most 20 minutes.
-[ "${PHI_STREAM_WINDOW:-1}" = 0 ] && exit 0
-for _ in $(seq 1 400); do
-    [ -n "$("$repo/target/release/phi-stream" status 2>/dev/null)" ] && exec "$repo/scripts/phi-stream.sh" window
-    sleep 3
-done
-exit 0
+# The repository's own launcher with the one command line every start uses
+# (phi-stream.opts; the watchdog's restarts and the measurement use the same
+# launcher): in tmux, its window opened once the model runs. libptracer.so
+# (PHI_STREAM_PRELOAD) lets the watchdog take a wedge's thread stacks.
+cd "$repo" || exit 1
+[ -f "$HOME/tts079/libptracer.so" ] && export PHI_STREAM_PRELOAD="$HOME/tts079/libptracer.so"
+# shellcheck disable=SC2046
+exec scripts/phi-stream.sh dev $(cat "$HOME/tts079/phi-stream.opts")
