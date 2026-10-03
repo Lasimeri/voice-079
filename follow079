@@ -69,6 +69,34 @@ locks() {   # CAM WINDOW
             print k
         }'
 }
+# How present the person is to a camera over the last WINDOW seconds: the
+# share of its frame their locked face fills, averaged over the window (an
+# unlocked second counts 0; a still face counts 0). The screen the person
+# is at sees their face largest: the desk camera and the laptop's share the
+# living room and both see them, and "until the current camera loses them"
+# kept the desk while they sat at the laptop. In parts per million.
+frame_px() { case $1 in inside) echo 2073600 ;; laptop) echo 921600 ;; bedroom) echo 307200 ;; *) echo 921600 ;; esac; }
+presence() {   # CAM WINDOW
+    local now; now=$(date +%s%6N)
+    tail -n 90 "$feeds/$1.log" 2>/dev/null | awk -v now="$now" -v w="$2" -v px="$(frame_px "$1")" '
+        /locked=1/ {
+            t = substr($1, 3) + 0
+            match($0, /box=[0-9]+,[0-9]+,[0-9]+,[0-9]+/); split(substr($0, RSTART + 4, RLENGTH - 4), b, ",")
+            n++; X[n] = b[1]; Y[n] = b[2]; A[n] = b[3] * b[4]; T[n] = t
+        }
+        END {
+            still = 0
+            if (n >= 30) {
+                lx = hx = X[n]; ly = hy = Y[n]
+                for (i = n - 29; i <= n; i++) { if (X[i] < lx) lx = X[i]; if (X[i] > hx) hx = X[i]; if (Y[i] < ly) ly = Y[i]; if (Y[i] > hy) hy = Y[i] }
+                still = (hx - lx < 4 && hy - ly < 4)
+            }
+            s = 0
+            if (!still) for (i = 1; i <= n; i++) if (T[i] >= now - w * 1000000) s += A[i] / px
+            printf "%d\n", s / w * 1000000
+        }'
+}
+
 # Seconds of the last WINDOW its microphone heard speech.
 speech() {   # ROOM WINDOW
     local now; now=$(date +%s%6N)
@@ -117,28 +145,36 @@ case "${1:-}" in
         ;;
     status)
         echo "room: $(cat "$rt/room" 2>/dev/null || echo none)"
-        for r in $ROOMS; do echo "  $r: face $(locks "$(cam_of "$r")" 5)/5 s, voice $(speech "$r" 3)/3 s"; done
+        for r in $ROOMS; do echo "  $r: face $(locks "$(cam_of "$r")" 5)/5 s (presence $(presence "$(cam_of "$r")" 5) ppm), voice $(speech "$r" 3)/3 s"; done
         exit 0
         ;;
     _loop)
         room=$(cat "$rt/room" 2>/dev/null || echo desk)
         apply "$room" "start"
+        lead="" held=0
         while :; do
             sleep 2
+            # By face: the room whose camera sees the person largest, once it
+            # leads the current room's by half again (or the current sees no
+            # one) on two checks running (4 s): no flapping between the desk
+            # and the laptop when both see them.
+            mine=$(presence "$(cam_of "$room")" 5)
             best="" bestscore=0 why=""
             for r in $ROOMS; do
                 [ "$r" = "$room" ] && continue
-                f=$(locks "$(cam_of "$r")" 5) v=$(speech "$r" 3)
+                p=$(presence "$(cam_of "$r")" 5) v=$(speech "$r" 3)
                 if [ "$VOICE" = 1 ] && [ "$(mic_of "$r")" = "$r" ] && [ "$(mic_of "$room")" != "$r" ] && [ "$v" -ge 2 ] && [ "$(speech "$(mic_of "$room")" 5)" -eq 0 ]; then
-                    s=$((10 + v)); w="heard there"
-                elif [ "$f" -ge 3 ] && [ "$(locks "$(cam_of "$room")" "$AWAY")" -eq 0 ]; then
-                    s=$f; w="seen there"
+                    s=$((100000000 + v)); w="heard there"
+                elif [ "$(locks "$(cam_of "$r")" 5)" -ge 3 ] && [ "$p" -gt $((mine * 3 / 2)) ]; then
+                    s=$p; w="seen there, face $p ppm against $mine"
                 else
                     continue
                 fi
                 if [ "$s" -gt "$bestscore" ]; then best=$r bestscore=$s why=$w; fi
             done
-            if [ -n "$best" ]; then room=$best; apply "$room" "$why"; fi
+            if [ -n "$best" ] && [ "$best" = "$lead" ]; then held=$((held + 1)); else held=0; fi
+            lead=$best
+            if [ -n "$best" ] && [ "$held" -ge 1 ]; then room=$best; apply "$room" "$why"; lead="" held=0; fi
             # Streams reconnect under new ids, and each track is a new one.
             mics "$room"; music "$room"
         done
