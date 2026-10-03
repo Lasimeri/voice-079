@@ -18,6 +18,14 @@ mkdir -p "$dir" "$(dirname "$log")"
 text=$(printf '%s' "${1:-}" | sed -E 's/^[[:space:]]*[Dd]iscord[[:space:][:punct:]]*//' |
     sed "s/[‘’]/'/g; s/[“”]/\"/g; s/…/.../g; s/[–—]/-/g" | LC_ALL=C tr -cd '\40-\176')
 [ -n "$text" ] || exit 0
+# Not sent: a filler alone ("Uh...") or a line trailing off ("... the
+# Claude Code that..."): both went to a public channel on 2026-10-03.
+bare=$(printf '%s' "$text" | tr 'A-Z' 'a-z' | tr -cd 'a-z ' | sed -E 's/\b(uh+|um+|er+|hm+|ah+|oh)\b//g; s/ //g')
+if [ -z "$bare" ] || [ "${text%...}" != "$text" ] || [ "${text%…}" != "$text" ]; then
+    printf '%s\tnot sent (filler or unfinished)\t-\t%s\n' "$(date '+%F %T')" "$text" >> "$log"
+    "$here/speak079d" say "Not sent to Discord: it sounded unfinished." > /dev/null 2>&1
+    exit 0
+fi
 
 # One KWin script run; its print comes back through the journal by nonce.
 kwin() {   # JS -> printed line
