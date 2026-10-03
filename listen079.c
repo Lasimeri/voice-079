@@ -154,7 +154,8 @@ static char *after_wake_in(char *t, int within) {
     return NULL;
 }
 
-static char *after_wake(char *t) { return after_wake_in(t, 3); }
+/* The name within the first four words ("Okay so, Claude, ..."; was three). */
+static char *after_wake(char *t) { return after_wake_in(t, 4); }
 
 /* What SCP-079 is saying now, and said last (speak079d's files). */
 static int speaking(void) {
@@ -209,6 +210,16 @@ static int phone_cmd(const char *rest) {
     for (int k = 0; OFF[k]; k++) if (!strncmp(p, OFF[k], strlen(OFF[k]))) return -1;
     for (int k = 0; ON[k]; k++) if (!strncmp(p, ON[k], strlen(ON[k]))) return 1;
     return 0;
+}
+
+/* What became of the last line heard ($dir/lastheard: epoch, verdict, text),
+ * for the status line, so the person never has to guess whether they were
+ * heard: "sent", or "dropped: <why>". */
+static void verdict(const char *v, const char *t) {
+    char p[600];
+    snprintf(p, sizeof p, "%s/lastheard", state_dir);
+    FILE *f = fopen(p, "w");
+    if (f) { fprintf(f, "%ld\t%s\t%.160s\n", (long)time(NULL), v, t); fclose(f); }
 }
 
 /* A line said in 079's voice (speak079d say), not typed to Claude. */
@@ -388,6 +399,7 @@ static int unfinished(const char *t) {
 
 static void emit_pending(void) {
     if (!*pending) return;
+    verdict("sent", pending);
     printf("%s\n", pending);
     fflush(stdout);
     pending[0] = 0;
@@ -423,6 +435,7 @@ static void out_text(const char *t) {
 static const SherpaOnnxSpeakerEmbeddingExtractor *spk;
 static float voiceprint[SPK_MAX], enr_sum[SPK_MAX], pas_sum[SPK_MAX];
 static int pas_n, vp_updates;
+static void voice_state(void);
 static int spk_dim, have_vp, enrolling, enr_n;
 static char vp_path[600], spk_log[600];
 
@@ -449,6 +462,7 @@ static void speaker_init(void) {
     FILE *f = fopen(vp_path, "rb");
     if (f) { have_vp = fread(voiceprint, sizeof(float), spk_dim, f) == (size_t)spk_dim; fclose(f); }
     fprintf(stderr, "listen079: speaker model loaded (%d dims), voiceprint %s\n", spk_dim, have_vp ? "loaded" : "not learned yet");
+    voice_state();
 }
 
 /* The utterance's embedding, unit length, into out; 0 when there is none. */
@@ -499,11 +513,20 @@ static void speaker_enroll(const float *e) {
  * (similarity >= 0.30), so someone else saying the name cannot steer it.
  * With a voiceprint, lines in other voices are dropped in every mode, so the
  * trigger word stops being needed against music and video. */
-#define PAS_N 5
+#define PAS_N 3
+/* The voiceprint's state for the status line ($dir/voice). */
+static void voice_state(void) {
+    char p[600];
+    snprintf(p, sizeof p, "%s/voice", state_dir);
+    FILE *f = fopen(p, "w");
+    if (!f) return;
+    if (have_vp) fprintf(f, "yours\n"); else fprintf(f, "learning %d/%d\n", pas_n, PAS_N);
+    fclose(f);
+}
 static void speaker_learn(const float *e, float sim) {
     if (!have_vp) {
         for (int i = 0; i < spk_dim; i++) pas_sum[i] += e[i];
-        if (++pas_n < PAS_N) return;
+        if (++pas_n < PAS_N) { voice_state(); return; }
         double s = 0;
         for (int i = 0; i < spk_dim; i++) s += (double)pas_sum[i] * pas_sum[i];
         s = sqrt(s) + 1e-9;
@@ -511,8 +534,17 @@ static void speaker_learn(const float *e, float sim) {
         FILE *f = fopen(vp_path, "wb");
         if (f) { fwrite(voiceprint, sizeof(float), spk_dim, f); fclose(f); }
         have_vp = 1;
+        voice_state();
         fprintf(stderr, "listen079: voiceprint learned passively from %d addressed lines\n", pas_n);
-        say_079("I know your voice now. You can drop the trigger word: I'll ignore voices that aren't yours.");
+        /* The voiceprint now does what the trigger word was for (keeping
+         * music and video out), so the trigger word goes: the person talks
+         * normally. "Claude, I'm on the phone" brings it back for a call. */
+        char pp[600];
+        snprintf(pp, sizeof pp, "%s/phone", state_dir);
+        int was_on = access(pp, F_OK) == 0;
+        unlink(pp);
+        say_079(was_on ? "I know your voice now, so the trigger word is off. Just talk; I'll ignore voices that aren't yours."
+                       : "I know your voice now. I'll ignore voices that aren't yours.");
         return;
     }
     if (sim < 0.30f) return;
@@ -581,10 +613,10 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
         static char lp[1024];
         if (commas >= 2) {
             if (!lp[0]) { size_t m = 0; for (const char *c = VOCAB_PROMPT; *c && m + 1 < sizeof lp; c++) lp[m++] = (char)tolower((unsigned char)*c); lp[m] = 0; }
-            if (strstr(lp, lt)) { fprintf(stderr, "listen079: prompt echo dropped: %s\n", t); return; }
+            if (strstr(lp, lt)) { fprintf(stderr, "listen079: prompt echo dropped: %s\n", t); verdict("dropped: noise", t); return; }
         }
     }
-    if (!ptt && is_echo(t)) { fprintf(stderr, "listen079: echo dropped: %s\n", t); return; }
+    if (!ptt && is_echo(t)) { fprintf(stderr, "listen079: echo dropped: %s\n", t); verdict("dropped: my own voice", t); return; }
     /* The camera gate ("one degree of separation", LISTEN079_FACEGATE=1): a
      * line is sent only when facegate saw the person present and facing the
      * camera within the last few seconds. Fail-open: if the state is missing
@@ -624,6 +656,9 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
         if (strstr(low, "forget my voice")) {
             have_vp = 0;
             unlink(vp_path);
+            pas_n = 0;
+            memset(pas_sum, 0, sizeof pas_sum);
+            voice_state();
             say_079("Your voiceprint is gone. I hear everyone again.");
             return;
         }
@@ -645,6 +680,7 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
         float min = mins ? (float)atof(mins) : 0.40f;
         if (have_vp && sim < min) {
             fprintf(stderr, "listen079: not the person's voice (%.2f): %s\n", sim, t);
+            verdict("dropped: not your voice", t);
             defer_cut = 0;
             return;
         }
@@ -680,13 +716,14 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
             t = rest;
         } else if (!open) {
             fprintf(stderr, "listen079: not for Claude: %s\n", t);
+            verdict("dropped: say Claude first", t);
             defer_cut = 0;
             return;
         } else if (filler(t)) {
             /* In the open window a bare "okay" or "yeah" is an
              * acknowledgment, not a request: sent, each was answered and
              * the answer opened another window ("Okay." "Yeah." ...). */
-            fprintf(stderr, "listen079: acknowledgment, not sent: %s\n", t);
+            fprintf(stderr, "listen079: acknowledgment, not sent: %s\n", t); verdict("dropped: just okay/yeah", t);
             defer_cut = 0;
             return;
         }
@@ -701,7 +738,7 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
      * the reply being said and got one of its own ("Stopped." "Okay."
      * "Standing by." "Yeah."). */
     if (!ptt && !wake && !strict && filler(t)) {
-        fprintf(stderr, "listen079: acknowledgment, not sent: %s\n", t);
+        fprintf(stderr, "listen079: acknowledgment, not sent: %s\n", t); verdict("dropped: just okay/yeah", t);
         defer_cut = 0;
         return;
     }
@@ -825,7 +862,13 @@ int main(int argc, char **argv) {
             if (db < floor_db) floor_db = 0.7f * floor_db + 0.3f * db;
             else floor_db = 0.995f * floor_db + 0.005f * db;
             if (floor_db < -80.0f) floor_db = -80.0f;
-            float over = speaking() ? 18.0f : 12.0f;
+            /* How far over the background a sound must stand to start a
+             * line: LISTEN079_GATE_DB, default 8 dB (was 12; the noise
+             * remover now holds the background low, so quiet speech clears
+             * it), 6 dB more while 079 itself is talking. */
+            static float gate_db = -1.0f;
+            if (gate_db < 0) { const char *g = getenv("LISTEN079_GATE_DB"); gate_db = g ? (float)atof(g) : 8.0f; }
+            float over = speaking() ? gate_db + 6.0f : gate_db;
             loud = (db > floor_db + over && frames_seen > 50) ? loud + 1 : 0;
             memcpy(pre[pre_at], frame, sizeof frame);
             pre_at = (pre_at + 1) % PRE_FRAMES;

@@ -221,12 +221,24 @@ case "${1:-}" in
         [ -f "$dir/play.pid" ] && kill "$(cat "$dir/play.pid")" 2>/dev/null
         ;;
     now)
+        # The status line, so the person never has to guess: what 079 is
+        # doing, whether the trigger word is on, the voiceprint's progress,
+        # and what became of the last thing heard (sent, or dropped and why).
         s=$(cat "$dir/now" 2>/dev/null)
         p=$(cat "$dir/ptt" 2>/dev/null)
-        if [ "$p" = "muted" ]; then printf '079 · muted (number pad period)\n'
-        elif [ "$p" = "listening" ]; then printf '079 · listening to you\n'
-        elif [ -n "$s" ]; then printf '079 ▸ %s\n' "$s"
-        else printf '079 · silent\n'; fi
+        if [ "$p" = "muted" ]; then printf '079 · muted (number pad period)\n'; exit 0; fi
+        if [ -n "$s" ]; then printf '079 ▸ %s\n' "$s"; exit 0; fi
+        st="079 · listening"
+        [ -e "$dir/phone" ] && st+=" · say \"Claude\" first" || st+=" · open mic"
+        v=$(cat "$dir/voice" 2>/dev/null); [ -n "$v" ] && st+=" · voice: $v"
+        if [ -s "$dir/lastheard" ] && IFS=$'\t' read -r ts verdict text < "$dir/lastheard"; then
+            age=$(( $(date +%s) - ts ))
+            if [ "$age" -lt 90 ]; then
+                [ "${#text}" -gt 48 ] && text="${text:0:47}…"
+                st+=" · ${age}s ago ${verdict}: \"$text\""
+            fi
+        fi
+        printf '%s\n' "$st"
         ;;
     say-stdin) enqueue 0 ;;
     say)

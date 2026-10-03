@@ -129,3 +129,11 @@ You don't need an enrollment session. Every line you address by name ("Claude, .
 - `LISTEN079_SPEAKER_MIN` is the similarity below which a line is dropped (default 0.40). `speaker.log` records every line's similarity, so you can tune it from real data.
 - `LISTEN079_NO_LEARN=1` turns off passive learning. "Claude, learn my voice" still enrolls explicitly (6 lines); "Claude, forget my voice" deletes the voiceprint.
 - Phone mode stays name-only, because on a call it's your own voice that should be ignored.
+
+## Knowing it heard you
+
+- **The status line** (`speak079d now`) always shows the listening state, whether the trigger word is required, the voiceprint's progress ("learning 1/3", then "yours"), and what became of the last thing heard in the past 90 seconds: `sent`, or `dropped: say Claude first` / `not your voice` / `my own voice` / `just okay/yeah` / `noise`. The listener writes that record to `$XDG_RUNTIME_DIR/speak-079/lastheard`.
+- **A soft click** plays every time a line is typed into Claude (`VOICE079_CLICK=0` turns it off). It goes out through the echo canceller, so the mic never takes it for speech.
+- **Easier to trigger:** a line starts when sound stands `LISTEN079_GATE_DB` (default 8 dB) above the background, 6 dB more while 079 is talking. The name can come anywhere in the first four words ("Okay so, Claude, ...").
+- **Learning finishes the job:** after three lines addressed by name, the voiceprint exists, and the listener turns the trigger word off by itself and says so. "Claude, I'm on the phone" brings it back for a call.
+- **Defaults now:** DeepFilterNet attenuation 100 dB (its maximum) and listener gain +26 dB.

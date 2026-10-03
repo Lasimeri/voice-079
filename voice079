@@ -63,6 +63,11 @@ listen() {
             [ -n "$said" ] || continue
             printf '%s\theard\t%s\n' "$(date +%Y-%m-%dT%H:%M:%S.%3N)" "$said" >> "$HOME/.local/share/speak-079/spoken.log"
             type_into_claude "[voice] $said"
+            # A soft click: "heard you, sent it" (VOICE079_CLICK=0: none). Through
+            # the echo canceller's output so the mic never takes it for speech.
+            if [ "${VOICE079_CLICK:-1}" != 0 ] && [ -s "$HOME/.cache/voice-079/heard.wav" ]; then
+                pw-play --target voice079_out "$HOME/.cache/voice-079/heard.wav" > /dev/null 2>&1 &
+            fi
         done
 }
 

@@ -22,7 +22,7 @@ start)
         nin="nr:Input" nout="nr:Output"
     else
         node="{ type = ladspa name = nr plugin = \"$here/nr/libdeep_filter_ladspa.so\" label = deep_filter_mono
-                control = { \"Attenuation Limit (dB)\" = ${NR079_ATTEN:-60} } }"
+                control = { \"Attenuation Limit (dB)\" = ${NR079_ATTEN:-100} } }"
         nin="nr:Audio In" nout="nr:Audio Out"
     fi
     # Gain for the listener only, after the noise is gone (NR079_GAIN_DB,
@@ -30,7 +30,7 @@ start)
     # speech, and whisper strains on that. Applied here, not to the mic
     # itself, so other programs using the mic (Discord) hear no change. A
     # clamp to [-1, 1] after it, so a loud moment cannot overflow.
-    mult=$(awk -v d="${NR079_GAIN_DB:-18}" 'BEGIN { printf "%.4f", 10 ^ (d / 20) }')
+    mult=$(awk -v d="${NR079_GAIN_DB:-26}" 'BEGIN { printf "%.4f", 10 ^ (d / 20) }')
     # Wait for the echo canceller's source (aec-all), else the capture could
     # fall back to the raw mic.
     for _ in $(seq 1 20); do pactl list short sources 2>/dev/null | grep -q voice079_mic_all && break; sleep 0.5; done
