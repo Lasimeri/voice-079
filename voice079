@@ -70,10 +70,22 @@ listen() {
     # mixed with the bedroom laptop's echo-cancelled mic for two-room input).
     [ -n "${VOICE079_SRC:-}" ] && src="$VOICE079_SRC"
     echo "voice079: listening through $src" >> "$log"
+    # A duck left behind by a listener stopped mid-utterance, undone.
+    "$here/duck079" off 2>/dev/null
     parec --device="$src" --format=float32le --rate=16000 --channels=1 --raw 2>> "$log" |
         "$here/listen079" "$model" $mode 2>> "$log" |
         while IFS= read -r said; do
             [ -n "$said" ] || continue
+            # "Discord, ...": the person's message for Discord, sent as them in
+            # the open conversation (discord079), not typed to Claude. The
+            # word with punctuation right after it, as whisper writes an
+            # address ("Discord keeps crashing" is talk, not a message).
+            case "${said,,}" in
+                discord[,.:\;\!?]*)
+                    printf '%s\tdiscord\t%s\n' "$(date +%Y-%m-%dT%H:%M:%S.%3N)" "$said" >> "$HOME/.local/share/speak-079/spoken.log"
+                    "$here/discord079" "$said" >> "$log" 2>&1 &
+                    continue ;;
+            esac
             printf '%s\theard\t%s\n' "$(date +%Y-%m-%dT%H:%M:%S.%3N)" "$said" >> "$HOME/.local/share/speak-079/spoken.log"
             type_into_claude "[voice] $said"
             # A soft click: "heard you, sent it" (VOICE079_CLICK=0: none). Through

@@ -1,0 +1,53 @@
+#!/bin/bash
+# duck079 on|off: the desktop's playing streams turned down while the person
+# talks; listen079 calls it (opt-in, LISTEN079_DUCK=1) when its gate opens on
+# speech (on) and 1.5 s after the utterance ends (off).
+# on:  every uncorked stream that plays to a real output goes down to
+#      DUCK079_PCT percent of its volume (default 50, about -18 dB); not the
+#      mic streams into mix_mic, not 079's own voice (pw-play) and not the
+#      echo canceller's or a loopback's internal streams.
+# off: every stream of an application it lowered that still sits at the
+#      lowered volume goes back. By application, not stream id: VLC opens a
+#      new stream per track, PipeWire's stream restore starts it at the
+#      volume it last had, and restoring by id had left the next track at 50%
+#      to be ducked again to 25% (2026-10-03). A volume the person changed
+#      while ducked stays.
+# State in $XDG_RUNTIME_DIR/speak-079/ducked-mic: "APP OLD NEW" per stream.
+set -u
+dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/speak-079"
+f="$dir/ducked-mic"
+mkdir -p "$dir"
+# Every stream as "ID APP VOLUME SINK CORKED NODE" (APP and NODE without spaces).
+streams() {
+    pactl list sink-inputs 2>/dev/null | awk '
+        function done() { if (id != "") print id, (a != "" ? a : "-"), v, s, c, (n != "" ? n : "-") }
+        /^Sink Input #/ { done(); id = substr($3, 2); a = ""; v = ""; s = ""; c = ""; n = "" }
+        /^\tSink: / { s = $2 }
+        /^\tCorked: / { c = $2 }
+        /^\tVolume:/ { v = $5 }
+        /application.name = / { a = $0; sub(/.*application.name = "/, "", a); sub(/".*/, "", a); gsub(/ /, "_", a) }
+        /node.name = / { n = $0; sub(/.*node.name = "/, "", n); sub(/".*/, "", n); gsub(/ /, "_", n) }
+        END { done() }'
+}
+case "${1:-}" in
+    on)
+        [ -s "$f" ] && exit 0
+        mix=$(pactl list short sinks 2>/dev/null | awk '$2 == "mix_mic" {print $1}')
+        streams | awk -v mix="${mix:--}" -v pct="${DUCK079_PCT:-50}" '
+            $5 == "no" && $4 != mix && $3 != "" && $6 !~ /pw-play|echo-cancel|loopback/ {
+                printf "%s %s %s %d%%\n", $1, $2, $3, ($3 + 0) * pct / 100 }' > "$f.tmp"
+        while read -r i a old new; do pactl set-sink-input-volume "$i" "$new" 2>/dev/null; done < "$f.tmp"
+        awk '{print $2, $3, $4}' "$f.tmp" > "$f"; rm -f "$f.tmp"
+        ;;
+    off)
+        [ -s "$f" ] || exit 0
+        streams > "$f.now"
+        while read -r a old new; do
+            awk -v a="$a" -v new="$new" '$2 == a && $3 == new {print $1}' "$f.now" |
+                while read -r i; do pactl set-sink-input-volume "$i" "$old" 2>/dev/null; done
+        done < "$f"
+        rm -f "$f" "$f.now"
+        ;;
+    *) echo "duck079 on|off" >&2; exit 1 ;;
+esac
+exit 0

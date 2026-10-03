@@ -238,6 +238,37 @@ static void verdict(const char *v, const char *t) {
 }
 
 /* A line said in 079's voice (speak079d say), not typed to Claude. */
+/* The desktop's playing streams turned down while the person talks
+ * (duck079 on, at the gate's opening) and back after (duck079 off), so the
+ * mic hears them over it ("when you pick up audio, make sure my host system
+ * audio quiets"). Opt-in, LISTEN079_DUCK=1: on the energy gate the music
+ * itself kept it ducked (2026-10-03); waits for the speech-model gate. */
+static int ducked;
+static long long unduck_at;
+static void duck(int on) {
+    const char *d = getenv("LISTEN079_DUCK");
+    if (!d || *d != '1' || ducked == on) return;
+    ducked = on;
+    pid_t pid = fork();
+    if (pid == 0) {
+        char *home = getenv("HOME");
+        char path[512];
+        snprintf(path, sizeof path, "%s/tts079/duck079", home ? home : "");
+        execl(path, path, on ? "on" : "off", (char *)NULL);
+        _exit(127);
+    }
+}
+
+/* "Discord, ..." (the line's first word): a message the person dictates for
+ * Discord, sent as them by discord079 (voice079 routes it), not for Claude. */
+static int discord_line(const char *t) {
+    while (*t == ' ' || *t == '"') t++;
+    if (strncasecmp(t, "discord", 7) != 0) return 0;
+    /* Punctuation right after the word, as whisper writes an address
+     * ("Discord, ..."): "Discord keeps crashing" is talk, not a message. */
+    return t[7] != 0 && strchr(",.:;!?", t[7]) != NULL;
+}
+
 static void say_079(const char *line) {
     pid_t pid = fork();
     if (pid == 0) {
@@ -729,6 +760,15 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
             return;
         }
     }
+    /* A line for Discord passes the trigger-word gates (its first word is
+     * the address); the voiceprint above still applies to it. */
+    if (!ptt && discord_line(t)) {
+        fprintf(stderr, "listen079: for Discord: %s\n", t);
+        verdict("to Discord", t);
+        defer_cut = 0;
+        out_text(t);
+        return;
+    }
     int media = !ptt && media_mode();
     int strict = !ptt && (phone_mode() || media);
     if ((wake || strict) && !ptt) {
@@ -749,7 +789,10 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
             defer_cut = 0;
             return;
         }
-        window_until = mono_ms() + WINDOW_MS;
+        /* Only a named line opens the window (and 079 finishing): a line let
+         * in by the window had renewed it, and a video's narrator chained
+         * through it line after line (2026-10-03). */
+        if (rest) window_until = mono_ms() + WINDOW_MS;
         /* Only the name stops 079: a line in the open window (room talk, a
          * fragment like "On...") cut every reply before it was heard; it is
          * sent and answered after. */
@@ -831,6 +874,10 @@ int main(int argc, char **argv) {
     int tail = -1;   /* --ptt: frames still to keep after the release */
     int was_speaking = 0;
     while (fread(frame, sizeof(float), FRAME, stdin) == FRAME) {
+        /* say_079's and duck's children, reaped (they were left as zombies). */
+        while (waitpid(-1, NULL, WNOHANG) > 0) {}
+        /* The streams back up a moment after the person stops. */
+        if (ducked && !in_speech && mono_ms() >= unduck_at) duck(0);
         /* 079 just finished: a reply may come without the wake word. */
         if (wake && !ptt) {
             int s = speaking();
@@ -857,6 +904,7 @@ int main(int argc, char **argv) {
                     n += FRAME;
                 }
                 cut_voice();
+                duck(1);
                 if (trace) fprintf(stderr, "press\n");
             }
             if (!in_speech) {
@@ -873,6 +921,7 @@ int main(int argc, char **argv) {
                 tail = -1;
                 pre_n = 0;
                 if (trace) fprintf(stderr, "release, %zu samples\n", n);
+                unduck_at = mono_ms() + 1500;
                 if (n >= MIN_SAMPLES) transcribe(ctx, buf, n);
             }
             continue;
@@ -911,6 +960,7 @@ int main(int argc, char **argv) {
                 /* --wake: cut once the words are for Claude (transcribe). Else 079
                  * finishes its sentence; only a stop word cuts it (transcribe). */
                 defer_cut = wake;
+                duck(1);
                 if (trace) fprintf(stderr, "start at %.2f s, floor %.1f dB, frame %.1f dB\n", frames_seen * 0.02, floor_db, db);
             }
             continue;
@@ -927,6 +977,7 @@ int main(int argc, char **argv) {
         loud = 0;
         pre_n = 0;
         if (trace) fprintf(stderr, "end at %.2f s, %zu samples\n", frames_seen * 0.02, n);
+        unduck_at = mono_ms() + 1500;
         if (n >= MIN_SAMPLES) transcribe(ctx, buf, n);
     }
     /* The input ended inside an utterance: it is said all the same. */

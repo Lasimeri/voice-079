@@ -1,0 +1,68 @@
+#!/bin/bash
+# discord079 "Discord, TEXT": a message the person dictated, sent as them in
+# the Discord app's open conversation. voice079 calls it for every heard line
+# whose first word is "Discord". The Discord window takes the focus for the
+# line (KWin script), desk types TEXT and Enter, the window that had the focus
+# gets it back, and 079 says where it went (the window's title names the
+# channel or DM: "#general | LocalLLM - Discord").
+#   DISCORD079_DRY=1: typed and checked, then cleared, never sent (a test).
+set -u
+here="$(dirname "$(readlink -f "$0")")"
+dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/speak-079"
+desk="${DESK:-$HOME/deskpilot/target/release/desk}"
+log="$HOME/.local/share/speak-079/discord.log"
+mkdir -p "$dir" "$(dirname "$log")"
+
+# The words after the trigger, in characters desk can type (US layout):
+# curly quotes and dashes made plain, anything else non-ASCII dropped.
+text=$(printf '%s' "${1:-}" | sed -E 's/^[[:space:]]*[Dd]iscord[[:space:][:punct:]]*//' |
+    sed "s/[‘’]/'/g; s/[“”]/\"/g; s/…/.../g; s/[–—]/-/g" | LC_ALL=C tr -cd '\40-\176')
+[ -n "$text" ] || exit 0
+
+# One KWin script run; its print comes back through the journal by nonce.
+kwin() {   # JS -> printed line
+    local n=$RANDOM$RANDOM id
+    printf '%s\n' "${1//NONCE/$n}" > "$dir/discord079.js"
+    id=$(qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript "$dir/discord079.js" "discord079-$n") || return 1
+    qdbus6 org.kde.KWin "/Scripting/Script$id" org.kde.kwin.Script.run > /dev/null 2>&1
+    qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript "discord079-$n" > /dev/null 2>&1
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        journalctl --user --since '-10s' -o cat 2>/dev/null | grep -a "DISCORD079 $n " | tail -1 | cut -d' ' -f3- | grep . && return 0
+        sleep 0.1
+    done
+    return 1
+}
+
+# Discord forward; the window that had the focus remembered.
+got=$(kwin 'var a = workspace.activeWindow, ws = workspace.windowList(), d = null;
+for (var i = 0; i < ws.length; i++) if (ws[i].resourceClass == "discord" && ws[i].normalWindow) { d = ws[i]; break; }
+if (d) { if (d.minimized) d.minimized = false; workspace.activeWindow = d; }
+print("DISCORD079 NONCE " + (a ? a.internalId : "-") + "\t" + (d ? d.caption : "-"));')
+prev=${got%%$'\t'*} where=${got#*$'\t'}
+if [ -z "$got" ] || [ "$where" = "-" ]; then
+    printf '%s\tno Discord window\t%s\n' "$(date '+%F %T')" "$text" >> "$log"
+    "$here/speak079d" say "Discord isn't open; nothing sent." > /dev/null 2>&1
+    exit 1
+fi
+where=${where% - Discord}
+sleep 0.2
+# desk loses each process's first key: the leading space is that key.
+if [ "${DISCORD079_DRY:-0}" = 1 ]; then
+    "$desk" type " $text" > /dev/null 2>&1
+    sleep 0.4
+    "$desk" shot --no-cursor > /dev/null 2>&1   # the test reads the newest shot
+    "$desk" key shift ctrl+a backspace > /dev/null 2>&1
+    verdict="dry run, cleared"
+else
+    "$desk" type " $text" --enter > /dev/null 2>&1 && verdict="sent" || verdict="type failed"
+fi
+sleep 0.2
+[ "$prev" != "-" ] && kwin 'var ws = workspace.windowList();
+for (var i = 0; i < ws.length; i++) if (String(ws[i].internalId) == "'"$prev"'") workspace.activeWindow = ws[i];
+print("DISCORD079 NONCE back");' > /dev/null
+printf '%s\t%s\t%s\t%s\n' "$(date '+%F %T')" "$verdict" "$where" "$text" >> "$log"
+# Where it went, said aloud: the title's letters only ("#╭🔴・general |
+# LocalLLM" is "general, LocalLLM").
+said=$(printf '%s' "$where" | sed 's/ | /, /g' | LC_ALL=C tr -cd 'A-Za-z0-9 ,_-' | sed -E 's/^[ ,]+//; s/  +/ /g')
+[ "${DISCORD079_DRY:-0}" = 1 ] || "$here/speak079d" say "Sent to ${said:-Discord}." > /dev/null 2>&1
+echo "$verdict: $where: $text"
