@@ -162,3 +162,7 @@ state079 show                 # what the next login will bring back
 state079 set phi off          # keep the Phi Stream from starting at login
 cam-grid-place --layout grid  # kept, and applied now
 ```
+
+## The audio follows you (`follow079`)
+
+`follow079 start` moves 079's voice, the music player and the microphone the listener hears to the room you are in: whichever camera's face tracker has its ADMIN reticle locked on you (the `locked=1` status lines, see optical-079). At the desk: 079 on the desktop speakers, VLC on the default sink, the desk mic heard. In the bedroom: 079 into a silent `o79_net` sink streamed to the bedroom laptop (`extras/two-room/audio-to-yg6.sh`), VLC into `bedroom_music` streamed there too (`music-to-yg6.sh`), the laptop's echo-cancelled mic heard (`bedroom-mic-in.sh` into `mix_mic`, where the desk mic is muted while you are away from it). A move needs the new room's reticle locked in 3 of its last 5 seconds and the current room's in none of its last 20, so a face flickering on one camera or you looking away from the desk moves nothing. `follow079 status` shows the room and the locks; `follow079 stop` puts everything back on the desk. It comes back at login if it was on (`state079` key `follow`).

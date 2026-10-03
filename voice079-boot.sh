@@ -50,4 +50,10 @@ fi
 # Camera windows lay themselves out as cameras connect and drop (resident KWin
 # script; the layout and screen last chosen, featured on DP-2 by default).
 [ -x "$HOME/tts079/cam-grid-place" ] && "$HOME/tts079/cam-grid-place" --watch > /dev/null 2>&1
+# The audio following the person between the desk and the bedroom (follow079),
+# if it was on at shutdown; it needs the cameras' feeds, so it starts last.
+if [ "$("$st" get follow off)" = on ] && [ -x "$HOME/tts079/follow079" ]; then
+    sleep 20
+    "$HOME/tts079/follow079" start > /dev/null 2>&1
+fi
 exit 0

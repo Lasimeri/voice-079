@@ -22,8 +22,15 @@ fi
 echo $$ > "$pidf"
 pactl list short sinks | grep -q bedroom_music ||
     pactl load-module module-null-sink sink_name=bedroom_music sink_properties=device.description=Bedroom-laptop-music > /dev/null
-# VLC's stream (and the next, as each track opens a new one) onto it.
-( while :; do for i in $(vlc_inputs); do pactl move-sink-input "$i" bedroom_music 2>/dev/null; done; sleep 2; done ) &
+# VLC's stream (and the next, as each track opens a new one) onto it, or
+# back to the default sink while follow079 has the person at the desk
+# ($XDG_RUNTIME_DIR/speak-079/music_room: bedroom, the default, or desk).
+roomf="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/speak-079/music_room"
+( while :; do
+    if [ "$(cat "$roomf" 2>/dev/null || echo bedroom)" = desk ]; then to=$(pactl get-default-sink); else to=bedroom_music; fi
+    for i in $(vlc_inputs); do pactl move-sink-input "$i" "$to" 2>/dev/null; done
+    sleep 2
+done ) &
 pf="${LAPTOP_SSH_PASS_FILE:-$HOME/.config/voice-079/laptop-ssh-pass}"
 A="$HOME/.cache/voice-079/laptop-askpass.sh"
 umask 077; printf '#!/bin/sh\nexec cat "%s"\n' "$pf" > "$A"; chmod 700 "$A"
