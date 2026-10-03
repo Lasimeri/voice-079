@@ -26,3 +26,6 @@ fi
 if [ "${VOICE079_BOOT_LAPCAMS:-1}" != 0 ] && [ -x "$HOME/tts079/lapcams.sh" ]; then
     setsid "$HOME/tts079/lapcams.sh" > "$HOME/.cache/voice-079/lapcams.log" 2>&1 < /dev/null &
 fi
+# Camera windows lay themselves out as cameras connect and drop (resident
+# KWin script; 1 fills the screen, 2 side by side, 3 two over one, 4 a grid).
+[ -x "$HOME/tts079/cam-grid-place" ] && "$HOME/tts079/cam-grid-place" --watch > /dev/null 2>&1

@@ -17,12 +17,20 @@ case "${1:-start}" in
 start)
     running && { echo "nr079: on"; exit 0; }
     if [ "${NR079_PLUGIN:-deepfilter}" = rnnoise ]; then
-        node="{ type = ladspa name = rn plugin = \"$here/nr/librnnoise_ladspa.so\" label = noise_suppressor_mono
+        node="{ type = ladspa name = nr plugin = \"$here/nr/librnnoise_ladspa.so\" label = noise_suppressor_mono
                 control = { \"VAD Threshold (%)\" = 50.0 \"VAD Grace Period (ms)\" = 200 \"Retroactive VAD Grace (ms)\" = 50 } }"
+        nin="nr:Input" nout="nr:Output"
     else
-        node="{ type = ladspa name = df plugin = \"$here/nr/libdeep_filter_ladspa.so\" label = deep_filter_mono
+        node="{ type = ladspa name = nr plugin = \"$here/nr/libdeep_filter_ladspa.so\" label = deep_filter_mono
                 control = { \"Attenuation Limit (dB)\" = ${NR079_ATTEN:-60} } }"
+        nin="nr:Audio In" nout="nr:Audio Out"
     fi
+    # Gain for the listener only, after the noise is gone (NR079_GAIN_DB,
+    # default 18): the person reached it at about -57 dBFS, far under normal
+    # speech, and whisper strains on that. Applied here, not to the mic
+    # itself, so other programs using the mic (Discord) hear no change. A
+    # clamp to [-1, 1] after it, so a loud moment cannot overflow.
+    mult=$(awk -v d="${NR079_GAIN_DB:-18}" 'BEGIN { printf "%.4f", 10 ^ (d / 20) }')
     # Wait for the echo canceller's source (aec-all), else the capture could
     # fall back to the raw mic.
     for _ in $(seq 1 20); do pactl list short sources 2>/dev/null | grep -q voice079_mic_all && break; sleep 0.5; done
@@ -41,7 +49,19 @@ context.modules = [
         args = {
             node.description = "Voice 079 mic, neural noise reduction"
             media.name       = "Voice 079 NR"
-            filter.graph = { nodes = [ $node ] }
+            filter.graph = {
+                nodes = [
+                    $node
+                    { type = builtin name = gain label = linear control = { "Mult" = $mult "Add" = 0.0 } }
+                    { type = builtin name = clip label = clamp control = { "Min" = -1.0 "Max" = 1.0 } }
+                ]
+                links = [
+                    { output = "$nout" input = "gain:In" }
+                    { output = "gain:Out" input = "clip:In" }
+                ]
+                inputs = [ "$nin" ]
+                outputs = [ "clip:Out" ]
+            }
             audio.rate = 48000
             audio.channels = 1
             audio.position = [ MONO ]

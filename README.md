@@ -119,3 +119,5 @@ curl -L -o nr/libdeep_filter_ladspa.so \
 ### Remote-machine credentials
 
 Scripts that SSH into the laptops never carry a password. They read it from a private file, `$LAPTOP_SSH_PASS_FILE`, default `~/.config/voice-079/laptop-ssh-pass` (create it yourself with `chmod 600`), through a small askpass helper. SSH keys are better still: with key login set up, none of this is needed.
+
+**Gain for the listener.** `nr079` adds gain after the noise remover (`NR079_GAIN_DB`, default 18 dB) and a limiter at full scale. It applies only to what the assistant hears: the mic's own level, which Discord and other programs use, is untouched. Measure what reaches the listener with `parec --device=voice079_mic_nr --format=float32le --rate=16000 --channels=1 --raw`. Speech should land around -30 to -20 dBFS.
