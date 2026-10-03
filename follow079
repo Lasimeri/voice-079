@@ -24,7 +24,12 @@ feeds="${CAM079_FEEDS:-$HOME/.local/share/phi-stream/dev/feeds}"
 log="$HOME/.cache/voice-079/follow.log"
 pidf="$rt/follow079.pid"
 st="$here/state079"
+# The listening mode the person last chose (open, wake, ptt), kept by voice079.
+mode_flag() { case "$("$st" get listen wake)" in open) echo "" ;; ptt) echo --ptt ;; *) echo --wake ;; esac; }
 AWAY=${FOLLOW_AWAY:-20}
+# Moves by voice too (FOLLOW_VOICE=1); off: the person wants the cameras alone
+# to decide (2026-10-03), the microphones only follow.
+VOICE=${FOLLOW_VOICE:-0}
 mkdir -p "$rt" "$(dirname "$log")"
 say() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$log"; }
 
@@ -105,7 +110,7 @@ case "${1:-}" in
         apply desk "stopped"
         for r in bedroom laptop; do "$here/room-link.sh" stop "$r"; done
         [ -f "$rt/micwatch-desk.pid" ] && kill -- -"$(cat "$rt/micwatch-desk.pid")" 2>/dev/null
-        "$here/voice079" stop > /dev/null; "$here/voice079" start --wake > /dev/null
+        "$here/voice079" stop > /dev/null; "$here/voice079" start $(mode_flag) > /dev/null
         "$st" set follow off
         echo "follow079: off; everything on the desk"
         exit 0
@@ -124,7 +129,7 @@ case "${1:-}" in
             for r in $ROOMS; do
                 [ "$r" = "$room" ] && continue
                 f=$(locks "$(cam_of "$r")" 5) v=$(speech "$r" 3)
-                if [ "$(mic_of "$r")" = "$r" ] && [ "$(mic_of "$room")" != "$r" ] && [ "$v" -ge 2 ] && [ "$(speech "$(mic_of "$room")" 5)" -eq 0 ]; then
+                if [ "$VOICE" = 1 ] && [ "$(mic_of "$r")" = "$r" ] && [ "$(mic_of "$room")" != "$r" ] && [ "$v" -ge 2 ] && [ "$(speech "$(mic_of "$room")" 5)" -eq 0 ]; then
                     s=$((10 + v)); w="heard there"
                 elif [ "$f" -ge 3 ] && [ "$(locks "$(cam_of "$room")" "$AWAY")" -eq 0 ]; then
                     s=$f; w="seen there"
@@ -163,7 +168,7 @@ setsid bash -c 'echo $$ > "'"$rt/micwatch-desk.pid"'"; while :; do parec --devic
 sleep 3
 if ! grep -aq 'listening through mix_mic.monitor' <(tail -n 5 "$HOME/.local/share/speak-079/listen.log" 2>/dev/null); then
     "$here/voice079" stop > /dev/null
-    VOICE079_SRC=mix_mic.monitor "$here/voice079" start --wake > /dev/null
+    VOICE079_SRC=mix_mic.monitor "$here/voice079" start $(mode_flag) > /dev/null
 fi
 setsid bash -c 'echo $$ > "'"$pidf"'"; exec "'"$0"'" _loop' > /dev/null 2>&1 < /dev/null &
 echo "follow079: on (desk, bedroom, laptop), log $log"

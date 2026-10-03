@@ -23,6 +23,17 @@ mkdir -p "$dir" "$(dirname "$log")"
 # (Konsole 26.08 refuses D-Bus sendText: its security-sensitive D-Bus API is
 # off by default, and every utterance had been dropped there).
 type_into_claude() {
+    # Konsole's D-Bus first: the line goes into the Claude Code session's
+    # terminal whatever window has the focus, and the Claude window is never
+    # brought forward. It needs EnableSecuritySensitiveDBusAPI=true in
+    # konsolerc, which Konsole reads when it starts; a Konsole started before
+    # refuses (AccessDenied), and the virtual keyboard below takes the line.
+    local svc sess
+    if read -r svc sess < "$dir/konsole" 2>/dev/null && [ -n "${sess:-}" ] &&
+        qdbus6 "$svc" "$sess" org.kde.konsole.Session.sendText "$1" > /dev/null 2>&1; then
+        qdbus6 "$svc" "$sess" org.kde.konsole.Session.sendText $'\r' > /dev/null 2>&1
+        return 0
+    fi
     [ -p "$dir/type.fifo" ] || { echo "voice079: no typer (ptt079 not running)" >> "$log"; return 1; }
     printf '%s\n' "$1" > "$dir/type.fifo"
 }
