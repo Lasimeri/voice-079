@@ -68,8 +68,17 @@ case "$p" in
 esac
 
 music=$(playing)
+# Where the person is (follow079: the system whose camera has them locked or
+# whose mic hears them), so Claude acts on that system and gives its focus back.
+case "$(cat "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/speak-079/room" 2>/dev/null)" in
+    desk) whereline="[where: the person is at the desktop (this machine); act here]" ;;
+    bedroom) whereline="[where: the person is at the bedroom laptop Yg6 (192.168.0.125, ssh as in ~/tts079/lapcams.sh); act there, not on the desktop, and leave its window focus as it was]" ;;
+    laptop) whereline="[where: the person is at the living-room laptop E16 (192.168.0.78, its CRT on HDMI, ssh as in ~/tts079/lapcams.sh); act there, not on the desktop, and leave its window focus as it was]" ;;
+    *) whereline="" ;;
+esac
 if [ -z "$new" ]; then
     [ -n "$camline" ] && printf '%s\n' "$camline"
+    [ -n "$whereline" ] && printf '%s\n' "$whereline"
 [ -n "$music" ] && printf '[music: the person is listening to %s]\n' "$music"
     exit 0
 fi
@@ -84,5 +93,6 @@ msg="[voice: your replies are spoken aloud in SCP-079's voice as you write them.
 msg+=". The person heard only what was said.]"
 printf '%s\n' "$msg"
 [ -n "$camline" ] && printf '%s\n' "$camline"
+[ -n "$whereline" ] && printf '%s\n' "$whereline"
 [ -n "$music" ] && printf '[music: the person is listening to %s]\n' "$music"
 exit 0
