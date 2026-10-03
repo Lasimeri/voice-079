@@ -178,6 +178,21 @@ static int phone_mode(void) {
     return 1;
 }
 
+/* Media mode's file ($dir/media, follow079): a laptop in the person's room
+ * plays sound no echo canceller sees (a video straight to the CRT), whose
+ * voices the voiceprint let through (0.45 to 0.80). Fresh only: follow079
+ * rewrites it every 2 s, so a stale file (follow079 gone) is ignored.
+ * LISTEN079_MEDIAGATE=0 turns it off. */
+static int media_mode(void) {
+    const char *g = getenv("LISTEN079_MEDIAGATE");
+    if (g && *g == '0') return 0;
+    char p[600];
+    snprintf(p, sizeof p, "%s/media", state_dir);
+    struct stat st;
+    if (stat(p, &st) != 0) return 0;
+    return time(NULL) - st.st_mtime <= 6;
+}
+
 static void set_phone(int on) {
     char p[600];
     snprintf(p, sizeof p, "%s/phone", state_dir);
@@ -672,7 +687,9 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
         }
         /* A line addressed by name teaches the voiceprint (LISTEN079_NO_LEARN
          * turns this off). */
-        if (r && !getenv("LISTEN079_NO_LEARN")) {
+        /* Not under media mode: there a named line carries the video's voices
+         * too, and each such line had pulled the voiceprint toward them. */
+        if (r && !getenv("LISTEN079_NO_LEARN") && !media_mode()) {
             speaker_learn(emb, sim);
             if (have_vp) sim = speaker_sim(emb);   /* the line that completed it is judged against it */
         }
@@ -712,15 +729,16 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
             return;
         }
     }
-    int strict = !ptt && phone_mode();
+    int media = !ptt && media_mode();
+    int strict = !ptt && (phone_mode() || media);
     if ((wake || strict) && !ptt) {
         char *rest = after_wake(t);
         int open = !strict && !speaking() && mono_ms() < window_until;
         if (rest) {
             t = rest;
         } else if (!open) {
-            fprintf(stderr, "listen079: not for Claude: %s\n", t);
-            verdict("dropped: say Claude first", t);
+            fprintf(stderr, "listen079: not for Claude%s: %s\n", media ? " (media playing)" : "", t);
+            verdict(media ? "dropped: video playing, say Claude first" : "dropped: say Claude first", t);
             defer_cut = 0;
             return;
         } else if (filler(t)) {

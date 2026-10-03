@@ -25,7 +25,9 @@ log="$HOME/.cache/voice-079/follow.log"
 pidf="$rt/follow079.pid"
 st="$here/state079"
 # The listening mode the person last chose (open, wake, ptt), kept by voice079.
-mode_flag() { case "$("$st" get listen wake)" in open) echo "" ;; ptt) echo --ptt ;; *) echo --wake ;; esac; }
+# Open unless wake or ptt was chosen: voice079 stop saves "off", and that had
+# restarted the listener in wake mode (trigger word on every line).
+mode_flag() { case "$("$st" get listen open)" in wake) echo --wake ;; ptt) echo --ptt ;; *) echo "" ;; esac; }
 AWAY=${FOLLOW_AWAY:-20}
 # Moves by voice too (FOLLOW_VOICE=1); off: the person wants the cameras alone
 # to decide (2026-10-03), the microphones only follow.
@@ -134,6 +136,27 @@ music() {   # ROOM
     pactl list sink-inputs 2>/dev/null | awk '/^Sink Input #/{id=substr($3,2)} /application.name = "VLC/{print id}' |
         while read -r i; do pactl move-sink-input "$i" "$to" 2>/dev/null; done
 }
+# A laptop in the person's room playing sound no echo canceller sees (the
+# E16's Firefox straight to the CRT: its narrator scored 0.45 to 0.80 against
+# the voiceprint and was typed to Claude): $rt/media names it, and listen079
+# then sends only lines that name Claude. The desk and the E16 share a room.
+# lapcams.sh's status pull writes media-NAME.status every second; stale (the
+# pull down) counts as nothing playing.
+media_gate() {   # ROOM
+    local m=laptop line now age n
+    [ "$1" = bedroom ] && m=bedroom
+    line=$(cat "$feeds/media-$m.status" 2>/dev/null)
+    now=$(date +%s)
+    age=$(( now - $(stat -c %Y "$feeds/media-$m.status" 2>/dev/null || echo 0) ))
+    n=$(printf '%s\n' "$line" | sed -n 's/.* playing=\([0-9]*\).*/\1/p')
+    if [ "$age" -le 6 ] && [ "${n:-0}" -ge 1 ]; then
+        [ -f "$rt/media" ] || echo "$(date '+%F %T') media playing on $m (${line##*apps=}): lines need Claude's name" >> "$log"
+        echo "$m ${line##*apps=}" > "$rt/media"
+    elif [ -f "$rt/media" ]; then
+        rm -f "$rt/media"
+        echo "$(date '+%F %T') media stopped on $m: open mic" >> "$log"
+    fi
+}
 apply() {   # ROOM WHY
     if [ "$1" = desk ]; then rm -f "$rt/playsink"; else echo "o79_$1" > "$rt/playsink"; fi
     echo "$1" > "$rt/room"
@@ -146,10 +169,10 @@ case "${1:-}" in
     stop)
         [ -f "$pidf" ] && kill "$(cat "$pidf")" 2>/dev/null
         rm -f "$pidf"
-        apply desk "stopped"
+        apply desk "stopped"; rm -f "$rt/media"
         for r in bedroom laptop; do "$here/room-link.sh" stop "$r"; done
         [ -f "$rt/micwatch-desk.pid" ] && kill -- -"$(cat "$rt/micwatch-desk.pid")" 2>/dev/null
-        "$here/voice079" stop > /dev/null; "$here/voice079" start $(mode_flag) > /dev/null
+        mf=$(mode_flag); "$here/voice079" stop > /dev/null; "$here/voice079" start $mf > /dev/null
         "$st" set follow off
         echo "follow079: off; everything on the desk"
         exit 0
@@ -188,6 +211,7 @@ case "${1:-}" in
             if [ -n "$best" ] && [ "$held" -ge 1 ]; then room=$best; apply "$room" "$why"; lead="" held=0; fi
             # Streams reconnect under new ids, and each track is a new one.
             mics "$room"; music "$room"
+            [ "${FOLLOW_MEDIA_GATE:-1}" = 1 ] && media_gate "$room"
         done
         ;;
     start) ;;
@@ -216,8 +240,9 @@ done
 setsid bash -c 'echo $$ > "'"$rt/micwatch-desk.pid"'"; while :; do parec --device=voice079_mic_nr --format=s16le --rate=16000 --channels=1 --raw 2>/dev/null | "'"$here/micwatch"'" desk "'"$feeds/mic-desk"'"; sleep 2; done' > /dev/null 2>&1 < /dev/null &
 sleep 3
 if ! grep -aq 'listening through mix_mic.monitor' <(tail -n 5 "$HOME/.local/share/speak-079/listen.log" 2>/dev/null); then
+    mf=$(mode_flag)
     "$here/voice079" stop > /dev/null
-    VOICE079_SRC=mix_mic.monitor "$here/voice079" start $(mode_flag) > /dev/null
+    VOICE079_SRC=mix_mic.monitor "$here/voice079" start $mf > /dev/null
 fi
 setsid bash -c 'echo $$ > "'"$pidf"'"; exec "'"$0"'" _loop' > /dev/null 2>&1 < /dev/null &
 echo "follow079: on (desk, bedroom, laptop), log $log"
