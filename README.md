@@ -27,6 +27,7 @@ This is the voice half of the setup. The cameras and face tracking live in a com
 | `gen-data.sh` | generates `tts079_data.h` from the SBTalker voice addon |
 | `hooks/voice-079-prompt.sh` | Claude Code UserPromptSubmit hook: tells Claude what you heard + attaches a camera frame |
 | `hooks/voice-079-stop.sh` | Claude Code Stop hook: speaks the reply's first paragraph |
+| `hooks/voice-079-start.sh` | Claude Code SessionStart hook: types your voice into the new session at once and starts the listener if it is down, in the mode last chosen |
 | `70-ptt079.rules` | udev rule so the typer can read the keyboard and write `/dev/uinput` without root |
 
 ## Requirements
@@ -66,7 +67,7 @@ sudo cp 70-ptt079.rules /etc/udev/rules.d/ && sudo udevadm control --reload && s
 ./voice079 stop
 ```
 
-Then hook it into Claude Code by pointing `~/.claude/settings.json` at the two scripts in `hooks/` (UserPromptSubmit -> `voice-079-prompt.sh`, Stop -> `voice-079-stop.sh`) and setting the status line to `speak079d now`.
+Then hook it into Claude Code by pointing `~/.claude/settings.json` at the three scripts in `hooks/` (SessionStart -> `voice-079-start.sh`, UserPromptSubmit -> `voice-079-prompt.sh`, Stop -> `voice-079-stop.sh`) and setting the status line to `speak079d now`.
 
 ### The "only answer when I say Claude" toggle
 
