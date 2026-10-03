@@ -678,7 +678,11 @@ static void transcribe(struct whisper_context *ctx, const float *buf, size_t n) 
         }
         const char *mins = getenv("LISTEN079_SPEAKER_MIN");
         float min = mins ? (float)atof(mins) : 0.40f;
-        if (have_vp && sim < min) {
+        /* A line that names Claude always goes through: the name is the
+         * stronger sign, and degraded audio (a starved CPU, noise) once
+         * scored the person's own voice at 0.25 and dropped "Claude, ..."
+         * lines. The voiceprint filters only lines that do not use the name. */
+        if (have_vp && sim < min && !r) {
             fprintf(stderr, "listen079: not the person's voice (%.2f): %s\n", sim, t);
             verdict("dropped: not your voice", t);
             defer_cut = 0;
