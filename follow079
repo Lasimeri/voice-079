@@ -104,15 +104,26 @@ speech() {   # ROOM WINDOW
         { t = substr($1, 3) + 0 } t >= now - w * 1000000 && / speech=1/ { n++ } END { print n + 0 }'
 }
 
-# Only the person's room's microphone open into mix_mic.
+# Only the person's room's microphone open into mix_mic. A laptop mic stream
+# found anywhere else is muted and moved back: when mix_mic is unloaded under
+# it PipeWire moves it to the default sink, the desktop speakers, and the
+# laptop's mic then played out of them at +24 dB (feedback, 2026-10-03).
 mics() {   # ROOM
+    local mix; mix=$(pactl list short sinks 2>/dev/null | awk '$2 == "mix_mic" {print $1}')
     pactl list sink-inputs 2>/dev/null | awk '
         /^Sink Input #/ { id = substr($3, 2) }
-        /application.name = "/ { a = $0; sub(/.*application.name = "/, "", a); sub(/".*/, "", a); print id, a }
-        /media.name = "loopback/ { print id, "desk-mic" }' |
-        while read -r id who; do
+        /^\tSink: / { s = $2 }
+        /application.name = "/ { a = $0; sub(/.*application.name = "/, "", a); sub(/".*/, "", a); print id, s, a }
+        /media.name = "loopback/ { print id, s, "desk-mic" }' |
+        while read -r id sink who; do
             case "$who" in
-                *-mic) [ "$who" = "$1-mic" ] && m=0 || m=1; pactl set-sink-input-mute "$id" "$m" ;;
+                *-mic)
+                    if [ -n "$mix" ] && [ "$sink" != "$mix" ]; then
+                        pactl set-sink-input-mute "$id" 1
+                        pactl move-sink-input "$id" mix_mic 2>/dev/null
+                        echo "$(date '+%F %T') $who was on sink $sink, moved back to mix_mic" >> "$log"
+                    fi
+                    [ "$who" = "$1-mic" ] && m=0 || m=1; pactl set-sink-input-mute "$id" "$m" ;;
             esac
         done
 }
@@ -186,7 +197,9 @@ esac
 if [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then echo "follow079: already on"; exit 0; fi
 "$st" set follow on
 # The earlier single-room links give way to room-link.sh.
-"$here/bedroom-mic-in.sh" stop > /dev/null 2>&1
+# Only when it runs: its stop unloads mix_mic, which pushed the room-link mic
+# streams onto the desktop speakers.
+[ -f "$HOME/.cache/voice-079/yg6-mic.pid" ] && "$here/bedroom-mic-in.sh" stop > /dev/null 2>&1
 "$here/music-to-yg6.sh" stop > /dev/null 2>&1
 [ -f "$HOME/.cache/voice-079/yg6-audio.pid" ] && kill "$(cat "$HOME/.cache/voice-079/yg6-audio.pid")" 2>/dev/null
 pactl list short sinks | grep -q '	mix_mic	' ||
