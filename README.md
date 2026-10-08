@@ -19,7 +19,7 @@ This is the voice half of the setup. The cameras and face tracking live in a com
 | `tts079.c` | the SCP-079 text-to-speech front end (built with tcc) |
 | `speak079d` | the speaking daemon and status line (ffmpeg voice chain: low pitch, slow tempo) |
 | `listen079.c` | the listener: whisper.cpp transcription + wake/filler logic + optional speaker ID |
-| `ptt079.c` | takes a keyboard (EVIOCGRAB), types recognized text via uinput, numpad-period = mute |
+| `ptt079.c` | takes a keyboard (EVIOCGRAB), types recognized text via uinput, numpad-period = mute; `ptt079 --toggle` flips the same mute once, from anything else (a script, the Glass's two-finger tap) |
 | `voice079` | the launcher: `voice079 start [--wake|--ptt]`, `voice079 stop` |
 | `voice079-boot.sh` | login autostart: waits for the sound card, then starts everything |
 | `aec-all.conf` | PipeWire echo-canceller (monitor mode): cancels everything the speakers play |

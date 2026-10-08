@@ -179,10 +179,16 @@ int main(int argc, char **argv) {
      * (open-mic mode; the person: "a mute button ... the period key on the
      * number pad"). No push-to-talk. */
     int mute_key = argc > 2 && !strcmp(argv[1], "--mute");
-    if (type_only || mute_key) { argv++; argc--; }
-    if (argc < 2) { fprintf(stderr, "ptt079 [--type-only|--mute] /dev/input/...-event-kbd\n"); return 1; }
     const char *rt = getenv("XDG_RUNTIME_DIR");
     snprintf(state_dir, sizeof state_dir, "%s/speak-079", rt ? rt : "/tmp");
+    /* --toggle: the same mute as the number pad's period, once, from
+     * anything else (the Glass's two-finger tap, glass-tap.sh); no keyboard. */
+    if (argc == 2 && !strcmp(argv[1], "--toggle")) {
+        toggle_mute();
+        return 0;
+    }
+    if (type_only || mute_key) { argv++; argc--; }
+    if (argc < 2) { fprintf(stderr, "ptt079 [--type-only|--mute] /dev/input/...-event-kbd | ptt079 --toggle\n"); return 1; }
 
     int fd = open(argv[1], O_RDWR | O_NONBLOCK);
     if (fd < 0) { fprintf(stderr, "ptt079: %s: %s\n", argv[1], strerror(errno)); return 1; }
