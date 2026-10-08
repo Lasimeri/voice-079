@@ -182,7 +182,7 @@ int main(int argc, char **argv) {
     const char *rt = getenv("XDG_RUNTIME_DIR");
     snprintf(state_dir, sizeof state_dir, "%s/speak-079", rt ? rt : "/tmp");
     /* --toggle: the same mute as the number pad's period, once, from
-     * anything else (the Glass's two-finger tap, glass-tap.sh); no keyboard. */
+     * anything else (a tap on the Glass's touchpad, glass-tap.sh); no keyboard. */
     if (argc == 2 && !strcmp(argv[1], "--toggle")) {
         toggle_mute();
         return 0;
